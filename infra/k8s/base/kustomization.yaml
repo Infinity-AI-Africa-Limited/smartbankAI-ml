@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: smartbank-ml
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - orchestrator-deployment.yaml
+  - fraud-detection-deployment.yaml
+  - credit-risk-deployment.yaml
+  - aml-compliance-deployment.yaml
+  - personalization-deployment.yaml
+  - predictive-analytics-deployment.yaml
+  - conversational-ai-deployment.yaml
+  - smart-dashboard-deployment.yaml
+  - data-aggregation-deployment.yaml
+  - chromadb-deployment.yaml
+  - services.yaml
+  - hpa.yaml

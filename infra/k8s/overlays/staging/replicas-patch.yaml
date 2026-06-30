@@ -1,0 +1,4 @@
+# Staging: run 1 replica per service to save cost
+- op: replace
+  path: /spec/replicas
+  value: 1

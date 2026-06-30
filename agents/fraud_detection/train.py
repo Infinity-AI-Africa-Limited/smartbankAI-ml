@@ -1,0 +1,142 @@
+"""
+Fraud Detection Agent — Model Training Script
+Usage: python train.py --data-path /data/transactions.csv --output-dir ./models
+"""
+import argparse
+import pickle
+import logging
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, roc_auc_score, precision_score, recall_score
+import lightgbm as lgb
+import shap
+import optuna
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+FEATURE_COLS = [
+    "amount_ngn", "channel_enc", "hour_of_day", "day_of_week",
+    "amount_deviation", "is_high_risk_hour", "is_weekend",
+    "velocity_1h", "sender_30d_avg"
+]
+TARGET_COL = "is_fraud"
+CHANNEL_MAP = {"mobile": 0, "web": 1, "ussd": 2, "atm": 3, "pos": 4}
+
+
+def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["channel_enc"] = df["channel"].map(CHANNEL_MAP).fillna(-1).astype(int)
+    df["amount_deviation"] = (
+        (df["amount_ngn"] - df["sender_30d_avg_amount"]) /
+        (df["sender_30d_avg_amount"] + 1)
+    ).fillna(0)
+    df["is_high_risk_hour"] = df["hour_of_day"].apply(lambda h: 1 if h < 5 else 0)
+    df["is_weekend"] = df["day_of_week"].apply(lambda d: 1 if d >= 5 else 0)
+    df["velocity_1h"] = df["sender_txn_count_1h"].fillna(0)
+    df["sender_30d_avg"] = df["sender_30d_avg_amount"].fillna(0)
+    return df
+
+
+def objective(trial, X_train, y_train, X_val, y_val):
+    params = {
+        "objective": "binary",
+        "metric": "auc",
+        "verbosity": -1,
+        "boosting_type": "gbdt",
+        "num_leaves": trial.suggest_int("num_leaves", 20, 100),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+        "min_child_samples": trial.suggest_int("min_child_samples", 10, 50),
+        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+        "scale_pos_weight": trial.suggest_float("scale_pos_weight", 1.0, 20.0),
+    }
+    model = lgb.LGBMClassifier(**params)
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
+    preds = model.predict_proba(X_val)[:, 1]
+    return roc_auc_score(y_val, preds)
+
+
+def train(data_path: str, output_dir: str, n_trials: int = 30):
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Loading data from %s", data_path)
+    df = pd.read_csv(data_path)
+    df = engineer_features(df)
+
+    X = df[FEATURE_COLS]
+    y = df[TARGET_COL]
+
+    logger.info("Class distribution: %s", y.value_counts().to_dict())
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train, y_train, test_size=0.15, random_state=42, stratify=y_train
+    )
+
+    logger.info("Running Optuna hyperparameter search (%d trials)...", n_trials)
+    study = optuna.create_study(direction="maximize")
+    study.optimize(
+        lambda trial: objective(trial, X_train, y_train, X_val, y_val),
+        n_trials=n_trials,
+        show_progress_bar=True,
+    )
+
+    best_params = study.best_params
+    best_params.update({"objective": "binary", "metric": "auc", "verbosity": -1})
+    logger.info("Best params: %s", best_params)
+
+    final_model = lgb.LGBMClassifier(**best_params)
+    final_model.fit(X_train, y_train)
+
+    y_pred_prob = final_model.predict_proba(X_test)[:, 1]
+    y_pred = (y_pred_prob >= 0.5).astype(int)
+
+    auc = roc_auc_score(y_test, y_pred_prob)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+
+    logger.info("Test AUC: %.4f | Precision: %.4f | Recall: %.4f", auc, precision, recall)
+    logger.info("\n%s", classification_report(y_test, y_pred))
+
+    # Save model
+    model_path = output_path / "fraud_lgbm.pkl"
+    with open(model_path, "wb") as f:
+        pickle.dump(final_model, f)
+    logger.info("Model saved to %s", model_path)
+
+    # Save SHAP explainer
+    explainer = shap.TreeExplainer(final_model)
+    explainer_path = output_path / "fraud_shap_explainer.pkl"
+    with open(explainer_path, "wb") as f:
+        pickle.dump(explainer, f)
+    logger.info("SHAP explainer saved to %s", explainer_path)
+
+    # Save evaluation report
+    report = {
+        "auc_roc": round(auc, 4),
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "best_params": best_params,
+        "feature_importance": dict(zip(FEATURE_COLS, final_model.feature_importances_.tolist())),
+    }
+    import json
+    with open(output_path / "evaluation_report.json", "w") as f:
+        json.dump(report, f, indent=2)
+
+    return report
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-path", required=True)
+    parser.add_argument("--output-dir", default="./models")
+    parser.add_argument("--n-trials", type=int, default=30)
+    args = parser.parse_args()
+    train(args.data_path, args.output_dir, args.n_trials)

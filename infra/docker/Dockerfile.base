@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartBank AI — Shared Base Image
+# All agent Dockerfiles inherit FROM this image.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS base
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for security
+RUN useradd -m -u 1000 smartbank
+WORKDIR /app
+
+# Shared Python dependencies
+COPY infra/docker/requirements.base.txt /tmp/requirements.base.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.base.txt
+
+# Copy shared modules
+COPY shared/ /app/shared/
+
+USER smartbank

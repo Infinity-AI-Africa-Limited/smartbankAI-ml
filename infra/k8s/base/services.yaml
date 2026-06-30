@@ -1,0 +1,148 @@
+# SmartBank AI — Kubernetes Services
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  labels:
+    app: orchestrator
+spec:
+  selector:
+    app: orchestrator
+  ports:
+    - protocol: TCP
+      port: 8001
+      targetPort: 8001
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-detection
+  labels:
+    app: fraud-detection
+spec:
+  selector:
+    app: fraud-detection
+  ports:
+    - protocol: TCP
+      port: 8002
+      targetPort: 8002
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: credit-risk
+  labels:
+    app: credit-risk
+spec:
+  selector:
+    app: credit-risk
+  ports:
+    - protocol: TCP
+      port: 8003
+      targetPort: 8003
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aml-compliance
+  labels:
+    app: aml-compliance
+spec:
+  selector:
+    app: aml-compliance
+  ports:
+    - protocol: TCP
+      port: 8004
+      targetPort: 8004
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: personalization
+  labels:
+    app: personalization
+spec:
+  selector:
+    app: personalization
+  ports:
+    - protocol: TCP
+      port: 8005
+      targetPort: 8005
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: predictive-analytics
+  labels:
+    app: predictive-analytics
+spec:
+  selector:
+    app: predictive-analytics
+  ports:
+    - protocol: TCP
+      port: 8006
+      targetPort: 8006
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conversational-ai
+  labels:
+    app: conversational-ai
+spec:
+  selector:
+    app: conversational-ai
+  ports:
+    - protocol: TCP
+      port: 8007
+      targetPort: 8007
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: smart-dashboard
+  labels:
+    app: smart-dashboard
+spec:
+  selector:
+    app: smart-dashboard
+  ports:
+    - protocol: TCP
+      port: 8008
+      targetPort: 8008
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-aggregation
+  labels:
+    app: data-aggregation
+spec:
+  selector:
+    app: data-aggregation
+  ports:
+    - protocol: TCP
+      port: 8009
+      targetPort: 8009
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chromadb
+spec:
+  selector:
+    app: chromadb
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

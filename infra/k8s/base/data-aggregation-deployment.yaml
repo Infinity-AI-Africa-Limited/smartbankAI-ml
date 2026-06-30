@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-aggregation
+  labels:
+    app: data-aggregation
+    project: smartbankAI
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: data-aggregation
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: data-aggregation
+        version: "1.0.0"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: data-aggregation
+          image: ghcr.io/infinityai-africa/smartbankAI-data-aggregation:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8009
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: smartbank-config
+            - secretRef:
+                name: smartbank-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8009
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8009
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models-pvc-data-aggregation
+      restartPolicy: Always

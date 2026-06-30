@@ -1,0 +1,263 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartBank AI — Full ML Stack (Local Development + Staging)
+# Usage: docker compose -f infra/docker/docker-compose.yml up --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-common-env: &common-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  SERVICE_AUTH_TOKEN: ${SERVICE_AUTH_TOKEN:-dev-secret-change-in-production}
+  DATABASE_URL: ${DATABASE_URL:-}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+x-common-healthcheck: &common-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 20s
+
+networks:
+  smartbank-ml:
+    driver: bridge
+
+volumes:
+  models-fraud:
+  models-credit:
+  models-aml:
+  models-personalization:
+  models-predictive:
+  models-conversational:
+  models-dashboard:
+  chromadb-data:
+
+services:
+
+  # ── Base image builder (not a running service) ──────────────────────────────
+  base-builder:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.base
+    image: smartbankAI-base:latest
+    command: echo "Base image built"
+
+  # ── Agent Orchestrator ──────────────────────────────────────────────────────
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: orchestrator/Dockerfile
+    image: smartbankAI-orchestrator:latest
+    container_name: smartbank-orchestrator
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *common-env
+      AGENT_NAME: orchestrator
+    networks:
+      - smartbank-ml
+    depends_on:
+      fraud-detection:
+        condition: service_healthy
+      credit-risk:
+        condition: service_healthy
+      aml-compliance:
+        condition: service_healthy
+      personalization:
+        condition: service_healthy
+      predictive-analytics:
+        condition: service_healthy
+      conversational-ai:
+        condition: service_healthy
+      smart-dashboard:
+        condition: service_healthy
+      data-aggregation:
+        condition: service_healthy
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+    restart: unless-stopped
+
+  # ── Agent 1: Fraud Detection ────────────────────────────────────────────────
+  fraud-detection:
+    build:
+      context: ../..
+      dockerfile: agents/fraud_detection/Dockerfile
+    image: smartbankAI-fraud-detection:latest
+    container_name: smartbank-fraud-detection
+    ports:
+      - "8002:8002"
+    environment:
+      <<: *common-env
+      AGENT_NAME: fraud_detection
+      MODEL_DIR: /app/models
+    volumes:
+      - models-fraud:/app/models
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+    restart: unless-stopped
+
+  # ── Agent 2: Credit Risk ────────────────────────────────────────────────────
+  credit-risk:
+    build:
+      context: ../..
+      dockerfile: agents/credit_risk/Dockerfile
+    image: smartbankAI-credit-risk:latest
+    container_name: smartbank-credit-risk
+    ports:
+      - "8003:8003"
+    environment:
+      <<: *common-env
+      AGENT_NAME: credit_risk
+      MODEL_DIR: /app/models
+    volumes:
+      - models-credit:/app/models
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+    restart: unless-stopped
+
+  # ── Agent 3: AML Compliance ─────────────────────────────────────────────────
+  aml-compliance:
+    build:
+      context: ../..
+      dockerfile: agents/aml_compliance/Dockerfile
+    image: smartbankAI-aml-compliance:latest
+    container_name: smartbank-aml-compliance
+    ports:
+      - "8004:8004"
+    environment:
+      <<: *common-env
+      AGENT_NAME: aml_compliance
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+    restart: unless-stopped
+
+  # ── Agent 4: Personalization ────────────────────────────────────────────────
+  personalization:
+    build:
+      context: ../..
+      dockerfile: agents/personalization/Dockerfile
+    image: smartbankAI-personalization:latest
+    container_name: smartbank-personalization
+    ports:
+      - "8005:8005"
+    environment:
+      <<: *common-env
+      AGENT_NAME: personalization
+      MODEL_DIR: /app/models
+    volumes:
+      - models-personalization:/app/models
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+    restart: unless-stopped
+
+  # ── Agent 5: Predictive Analytics ──────────────────────────────────────────
+  predictive-analytics:
+    build:
+      context: ../..
+      dockerfile: agents/predictive_analytics/Dockerfile
+    image: smartbankAI-predictive-analytics:latest
+    container_name: smartbank-predictive-analytics
+    ports:
+      - "8006:8006"
+    environment:
+      <<: *common-env
+      AGENT_NAME: predictive_analytics
+      MODEL_DIR: /app/models
+    volumes:
+      - models-predictive:/app/models
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+    restart: unless-stopped
+
+  # ── Agent 6: Conversational AI ──────────────────────────────────────────────
+  conversational-ai:
+    build:
+      context: ../..
+      dockerfile: agents/conversational_ai/Dockerfile
+    image: smartbankAI-conversational-ai:latest
+    container_name: smartbank-conversational-ai
+    ports:
+      - "8007:8007"
+    environment:
+      <<: *common-env
+      AGENT_NAME: conversational_ai
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-3-5-sonnet-20241022}
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+    networks:
+      - smartbank-ml
+    depends_on:
+      - chromadb
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+    restart: unless-stopped
+
+  # ── Agent 7: Smart Dashboard ────────────────────────────────────────────────
+  smart-dashboard:
+    build:
+      context: ../..
+      dockerfile: agents/smart_dashboard/Dockerfile
+    image: smartbankAI-smart-dashboard:latest
+    container_name: smartbank-smart-dashboard
+    ports:
+      - "8008:8008"
+    environment:
+      <<: *common-env
+      AGENT_NAME: smart_dashboard
+      MODEL_DIR: /app/models
+    volumes:
+      - models-dashboard:/app/models
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+    restart: unless-stopped
+
+  # ── Agent 8: Data Aggregation ───────────────────────────────────────────────
+  data-aggregation:
+    build:
+      context: ../..
+      dockerfile: agents/data_aggregation/Dockerfile
+    image: smartbankAI-data-aggregation:latest
+    container_name: smartbank-data-aggregation
+    ports:
+      - "8009:8009"
+    environment:
+      <<: *common-env
+      AGENT_NAME: data_aggregation
+    networks:
+      - smartbank-ml
+    healthcheck:
+      <<: *common-healthcheck
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+    restart: unless-stopped
+
+  # ── ChromaDB (vector store for Conversational AI) ───────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: smartbank-chromadb
+    ports:
+      - "8100:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    networks:
+      - smartbank-ml
+    restart: unless-stopped
