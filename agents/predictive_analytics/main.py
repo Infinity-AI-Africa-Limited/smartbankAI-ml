@@ -10,7 +10,6 @@ import numpy as np
 from pathlib import Path
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
-from typing import Optional
 import sys
 sys.path.append("/app")
 
