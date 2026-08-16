@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/fraud_detection/ /app/agent/
 
 # Model artefacts (mounted as volume in production; baked in for staging)
-RUN mkdir -p /app/models
+USER root
+RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
+USER smartbank
 
 ENV AGENT_NAME=fraud_detection \
     AGENT_VERSION=1.0.0 \

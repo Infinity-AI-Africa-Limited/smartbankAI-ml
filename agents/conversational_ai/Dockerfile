@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/conversational_ai/ /app/agent/
 
 # Model artefacts directory
-RUN mkdir -p /app/models
+USER root
+RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
+USER smartbank
 
 ENV AGENT_NAME=conversational_ai \
     AGENT_VERSION=1.0.0 \

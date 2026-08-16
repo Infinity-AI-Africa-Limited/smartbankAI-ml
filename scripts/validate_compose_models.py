@@ -40,6 +40,12 @@ def validate() -> None:
         contents = dockerfile.read_text(encoding="utf-8")
         if "smartbankAI-base" in contents:
             raise ValueError(f"{dockerfile.relative_to(ROOT)} references an invalid uppercase base image")
+    for service in EXPECTED:
+        dockerfile = ROOT / "agents" / EXPECTED[service] / "Dockerfile"
+        contents = dockerfile.read_text(encoding="utf-8")
+        required_model_setup = "USER root\nRUN mkdir -p /app/models && chown smartbank:smartbank /app/models\nUSER smartbank"
+        if required_model_setup not in contents:
+            raise ValueError(f"{dockerfile.relative_to(ROOT)} does not initialise /app/models for the non-root runtime user")
 
 
 if __name__ == "__main__":
