@@ -33,7 +33,16 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-asyncio httpx pydantic pydantic-settings fastapi uvicorn
+          pip install pytest pytest-asyncio httpx pydantic pydantic-settings fastapi uvicorn ruff pyyaml
+          pip install lightgbm scikit-learn networkx pandas numpy optuna
+
+      - name: Build synthetic development artefacts
+        run: |
+          chmod +x scripts/build_synthetic_models.sh
+          ./scripts/build_synthetic_models.sh
+
+      - name: Validate local model mounts
+        run: python scripts/validate_compose_models.py
 
       - name: Run unit tests
         run: pytest tests/unit/ -v --tb=short
@@ -45,9 +54,7 @@ jobs:
           grep -F "/v1/route" contracts/ml-orchestrator.v1.openapi.yaml
 
       - name: Lint with ruff
-        run: |
-          pip install ruff
-          ruff check agents/ orchestrator/ shared/ tests/
+        run: ruff check agents/ orchestrator/ shared/ scripts/ tests/
 
   # ── 2. Build & Push Docker Images ──────────────────────────────────────────
   build:

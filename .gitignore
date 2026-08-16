@@ -1,0 +1,5 @@
+.env
+data/synthetic/
+agents/*/models/
+__pycache__/
+*.pyc
