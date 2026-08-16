@@ -7,8 +7,7 @@ import time
 import logging
 import hashlib
 import xml.etree.ElementTree as ET
-from datetime import datetime
-from fastapi import FastAPI, Depends, UploadFile, File
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from typing import Optional
 import sys

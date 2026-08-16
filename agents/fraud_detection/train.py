@@ -7,7 +7,6 @@ import pickle
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score, precision_score, recall_score
