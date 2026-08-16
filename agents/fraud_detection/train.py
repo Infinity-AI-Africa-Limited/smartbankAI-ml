@@ -5,15 +5,23 @@ Usage: python train.py --data-path /data/transactions.csv --output-dir ./models
 import argparse
 import pickle
 import logging
+import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, roc_auc_score, precision_score, recall_score
+from sklearn.metrics import classification_report, precision_recall_curve, roc_auc_score, precision_score, recall_score
+from sklearn.ensemble import IsolationForest
 import lightgbm as lgb
-import shap
 import optuna
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from shared.training import ensure_synthetic, write_model_card  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,6 +75,7 @@ def train(data_path: str, output_dir: str, n_trials: int = 30):
 
     logger.info("Loading data from %s", data_path)
     df = pd.read_csv(data_path)
+    ensure_synthetic(df, "fraud transaction data")
     df = engineer_features(df)
 
     X = df[FEATURE_COLS]
@@ -95,8 +104,14 @@ def train(data_path: str, output_dir: str, n_trials: int = 30):
     final_model = lgb.LGBMClassifier(**best_params)
     final_model.fit(X_train, y_train)
 
+    validation_prob = final_model.predict_proba(X_val)[:, 1]
+    precision_curve, recall_curve, threshold_curve = precision_recall_curve(y_val, validation_prob)
+    valid = np.where(recall_curve[:-1] >= 0.75)[0]
+    selected_index = int(valid[np.argmax(precision_curve[:-1][valid])]) if len(valid) else int(np.argmax(2 * precision_curve[:-1] * recall_curve[:-1] / (precision_curve[:-1] + recall_curve[:-1] + 1e-9)))
+    review_threshold = float(threshold_curve[selected_index])
+
     y_pred_prob = final_model.predict_proba(X_test)[:, 1]
-    y_pred = (y_pred_prob >= 0.5).astype(int)
+    y_pred = (y_pred_prob >= review_threshold).astype(int)
 
     auc = roc_auc_score(y_test, y_pred_prob)
     precision = precision_score(y_test, y_pred)
@@ -111,24 +126,46 @@ def train(data_path: str, output_dir: str, n_trials: int = 30):
         pickle.dump(final_model, f)
     logger.info("Model saved to %s", model_path)
 
-    # Save SHAP explainer
-    explainer = shap.TreeExplainer(final_model)
-    explainer_path = output_path / "fraud_shap_explainer.pkl"
-    with open(explainer_path, "wb") as f:
-        pickle.dump(explainer, f)
-    logger.info("SHAP explainer saved to %s", explainer_path)
+    anomaly_model = IsolationForest(n_estimators=200, contamination=float(y_train.mean()), random_state=42)
+    anomaly_model.fit(X_train[y_train == 0])
+    anomaly_scores = -anomaly_model.score_samples(X_test)
+    anomaly_auc = roc_auc_score(y_test, anomaly_scores)
+    with open(output_path / "fraud_isolation_forest.pkl", "wb") as f:
+        pickle.dump({"model": anomaly_model, "feature_columns": FEATURE_COLS}, f)
+
+    # Export TreeSHAP-compatible per-feature contributions from LightGBM directly.
+    # This avoids importing the external SHAP plotting stack in CPU-only environments.
+    contributions = final_model.booster_.predict(X_test.head(25), pred_contrib=True)
+    contribution_rows = []
+    for row_index, values in enumerate(contributions):
+        contribution_rows.append({
+            "row": int(row_index),
+            "feature_contributions": {feature: round(float(value), 6) for feature, value in zip(FEATURE_COLS, values[:-1])},
+            "expected_value": round(float(values[-1]), 6),
+        })
+    with open(output_path / "fraud_tree_shap_samples.json", "w") as f:
+        json.dump(contribution_rows, f, indent=2)
 
     # Save evaluation report
     report = {
         "auc_roc": round(auc, 4),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
+        "review_threshold": round(review_threshold, 6),
+        "anomaly_auc_roc": round(float(anomaly_auc), 4),
         "best_params": best_params,
         "feature_importance": dict(zip(FEATURE_COLS, final_model.feature_importances_.tolist())),
+        "synthetic_only": True,
     }
-    import json
     with open(output_path / "evaluation_report.json", "w") as f:
         json.dump(report, f, indent=2)
+
+    write_model_card(
+        output_path, "Fraud Detection", "LightGBM classifier with LightGBM TreeSHAP contribution export", "synthetic-1.0.0",
+        data_path, FEATURE_COLS, report,
+        ["Synthetic fraud labels reflect generator assumptions, not investigated case outcomes.", "The selected threshold only prioritises a human review queue and must not block, decline, or reverse a transaction.", "Independent validation, calibration, bias testing, and drift monitoring are required with bank-approved data."],
+        "Prioritise transactions for fraud-operations review with interpretable feature contributions.",
+    )
 
     return report
 

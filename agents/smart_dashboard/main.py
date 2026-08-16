@@ -6,7 +6,7 @@ Port: 8008
 import time
 import pickle
 import logging
-import numpy as np
+import pandas as pd
 from pathlib import Path
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
@@ -56,7 +56,7 @@ async def load_model():
 async def health():
     return HealthResponse(
         agent="smart_dashboard", version="1.0.0",
-        model_loaded=True, uptime_seconds=round(time.time() - _start_time, 1),
+        model_loaded=kmeans_model is not None, uptime_seconds=round(time.time() - _start_time, 1),
     )
 
 
@@ -94,7 +94,7 @@ async def generate_insights(req: InsightRequest):
     latency = (time.monotonic() - start) * 1000
     return AgentResponse(
         agent="smart_dashboard", version="1.0.0", latency_ms=round(latency, 2),
-        payload={"narrative": narrative, "metrics_summary": req.model_dump()},
+        payload={"narrative": narrative, "metrics_summary": req.model_dump(), "human_review_required": True, "synthetic_model": kmeans_model is not None},
     )
 
 
@@ -105,15 +105,19 @@ async def segment_customers(req: SegmentRequest):
 
     results = []
     for c in req.customers:
-        features = np.array([[
-            c.get("days_since_txn", 30),
-            c.get("product_count", 1),
-            c.get("monthly_txn_avg", 5),
-            c.get("account_age_months", 12),
-            c.get("income_band_enc", 1),
-        ]])
-        if kmeans_model is not None:
-            seg_id = int(kmeans_model.predict(features)[0])
+        if kmeans_model is not None and isinstance(kmeans_model, dict):
+            income = {0: 115_000, 1: 285_000, 2: 640_000, 3: 1_450_000}.get(c.get("income_band_enc", 1), 285_000)
+            features = pd.DataFrame([{
+                "monthly_income_ngn": income,
+                "avg_monthly_balance_ngn": income * 1.2,
+                "account_age_months": c.get("account_age_months", 12),
+                "products_held_count": c.get("product_count", 1),
+                "days_since_last_transaction": c.get("days_since_txn", 30),
+                "monthly_transaction_count_trend": 0.0,
+                "complaint_count_12m": 0,
+            }])
+            scaled = kmeans_model["scaler"].transform(features[kmeans_model["feature_columns"]])
+            seg_id = int(kmeans_model["model"].predict(scaled)[0])
         else:
             # Stub: rule-based segmentation
             days = c.get("days_since_txn", 30)
@@ -125,5 +129,5 @@ async def segment_customers(req: SegmentRequest):
     latency = (time.monotonic() - start) * 1000
     return AgentResponse(
         agent="smart_dashboard", version="1.0.0", latency_ms=round(latency, 2),
-        payload={"segmented_customers": results, "total": len(results)},
+        payload={"segmented_customers": results, "total": len(results), "human_review_required": True, "synthetic_model": kmeans_model is not None},
     )

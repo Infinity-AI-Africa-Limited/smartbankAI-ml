@@ -5,14 +5,17 @@ Port: 8007
 """
 import time
 import logging
+import pickle
+import numpy as np
+from pathlib import Path
 from fastapi import FastAPI, Depends
-from fastapi.responses import StreamingResponse
 import sys
 sys.path.append("/app")
 
 from shared.schemas.base import ConversationalRequest, ConversationalResponse, AgentResponse, HealthResponse
 from shared.middleware.auth import verify_service_token, audit_log_middleware
 from shared.utils.config import get_settings
+from agents.conversational_ai.safety import safety_response
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -21,6 +24,7 @@ app.middleware("http")(audit_log_middleware)
 
 retriever = None
 llm_client = None
+synthetic_retriever = None
 _start_time = time.time()
 
 SYSTEM_PROMPT = """You are SmartBank AI Assistant, a helpful and knowledgeable banking assistant 
@@ -42,7 +46,7 @@ Context from knowledge base:
 
 @app.on_event("startup")
 async def setup_rag():
-    global retriever, llm_client
+    global retriever, llm_client, synthetic_retriever
     try:
         from langchain_community.vectorstores import Chroma
         from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -63,11 +67,24 @@ async def setup_rag():
             logger.info("Anthropic client initialised")
     except Exception as e:
         logger.warning("RAG setup failed (running in stub mode): %s", e)
+    baseline_path = Path(settings.model_dir) / "tfidf_retriever.pkl"
+    if baseline_path.exists():
+        with baseline_path.open("rb") as handle:
+            synthetic_retriever = pickle.load(handle)
+        logger.info("Synthetic retrieval baseline loaded")
 
 
 def retrieve_context(query: str) -> tuple[str, list[str]]:
     if retriever is None:
-        return "", []
+        if synthetic_retriever is None:
+            return "", []
+        vectorizer = synthetic_retriever["vectorizer"]
+        matrix = synthetic_retriever["matrix"]
+        articles = synthetic_retriever["articles"]
+        scores = (vectorizer.transform([query]) @ matrix.T).toarray().ravel()
+        selected = np.argsort(scores)[::-1][:3]
+        selected_articles = [articles[int(index)] for index in selected if scores[int(index)] > 0]
+        return "\n\n".join(article["content"] for article in selected_articles), [article["source_id"] for article in selected_articles]
     docs = retriever.get_relevant_documents(query)
     context = "\n\n".join(d.page_content for d in docs)
     sources = [d.metadata.get("source", "SmartBank Knowledge Base") for d in docs]
@@ -76,7 +93,8 @@ def retrieve_context(query: str) -> tuple[str, list[str]]:
 
 def generate_response(message: str, history: list[dict], context: str) -> str:
     if llm_client is None:
-        # Stub response
+        if context:
+            return f"Development knowledge-base response: {context} This information is advisory only; no banking action will be taken without your confirmation."
         return (
             f"Thank you for your message. I'm SmartBank AI Assistant. "
             f"You asked: '{message}'. Our team is here to help with all your banking needs. "
@@ -101,7 +119,7 @@ def generate_response(message: str, history: list[dict], context: str) -> str:
 async def health():
     return HealthResponse(
         agent="conversational_ai", version="1.0.0",
-        model_loaded=llm_client is not None,
+        model_loaded=llm_client is not None or synthetic_retriever is not None,
         uptime_seconds=round(time.time() - _start_time, 1),
     )
 
@@ -109,8 +127,9 @@ async def health():
 @app.post("/chat", response_model=AgentResponse, dependencies=[Depends(verify_service_token)])
 async def chat(req: ConversationalRequest):
     start = time.monotonic()
-    context, sources = retrieve_context(req.message)
-    response_text = generate_response(req.message, req.conversation_history, context)
+    guarded_response = safety_response(req.message)
+    context, sources = retrieve_context(req.message) if guarded_response is None else ("", [])
+    response_text = guarded_response or generate_response(req.message, req.conversation_history, context)
 
     suggested_actions = []
     msg_lower = req.message.lower()
@@ -130,5 +149,5 @@ async def chat(req: ConversationalRequest):
             sources=sources,
             suggested_actions=suggested_actions,
             confidence=0.92 if llm_client else 0.5,
-        ).model_dump(),
+        ).model_dump() | {"human_review_required": True, "synthetic_knowledge_base": synthetic_retriever is not None},
     )
