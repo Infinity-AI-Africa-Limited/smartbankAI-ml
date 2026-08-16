@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import sys
 sys.path.append("/app")
 
-from shared.schemas.base import LoanApplicationRequest, AgentResponse, HealthResponse, RiskLevel
+from shared.schemas.base import LoanApplicationRequest, AgentResponse, HealthResponse
 from shared.middleware.auth import verify_service_token, audit_log_middleware
 from shared.utils.config import get_settings
 
