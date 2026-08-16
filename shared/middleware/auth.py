@@ -3,7 +3,6 @@ HMAC-based inter-service authentication middleware.
 Every agent validates inbound requests from the orchestrator using this middleware.
 """
 import hmac
-import hashlib
 import time
 from fastapi import Request, HTTPException, status
 from shared.utils.config import get_settings

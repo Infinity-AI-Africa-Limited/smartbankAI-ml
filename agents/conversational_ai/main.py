@@ -1,12 +1,11 @@
 """
 Agent 6: Conversational AI Agent
-Architecture: RAG (LangChain + ChromaDB) + Claude API for generation
+Architecture: controlled Claude API generation with an approved retrieval boundary
 Port: 8007
 """
 import time
 import logging
 from fastapi import FastAPI, Depends
-from fastapi.responses import StreamingResponse
 import sys
 sys.path.append("/app")
 
@@ -19,7 +18,6 @@ settings = get_settings()
 app = FastAPI(title="SmartBank AI — Conversational AI Agent", version="1.0.0")
 app.middleware("http")(audit_log_middleware)
 
-retriever = None
 llm_client = None
 _start_time = time.time()
 
@@ -41,37 +39,25 @@ Context from knowledge base:
 
 
 @app.on_event("startup")
-async def setup_rag():
-    global retriever, llm_client
+async def setup_conversational_client():
+    global llm_client
     try:
-        from langchain_community.vectorstores import Chroma
-        from langchain_community.embeddings import HuggingFaceEmbeddings
         from anthropic import Anthropic
-
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        vectorstore = Chroma(
-            collection_name="smartbank_knowledge",
-            embedding_function=embeddings,
-            host=settings.chroma_host,
-            port=settings.chroma_port,
-        )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        logger.info("RAG retriever initialised")
-
         if settings.anthropic_api_key:
             llm_client = Anthropic(api_key=settings.anthropic_api_key)
             logger.info("Anthropic client initialised")
     except Exception as e:
-        logger.warning("RAG setup failed (running in stub mode): %s", e)
+        logger.warning("Conversational client setup failed (running in stub mode): %s", e)
 
 
 def retrieve_context(query: str) -> tuple[str, list[str]]:
-    if retriever is None:
-        return "", []
-    docs = retriever.get_relevant_documents(query)
-    context = "\n\n".join(d.page_content for d in docs)
-    sources = [d.metadata.get("source", "SmartBank Knowledge Base") for d in docs]
-    return context, sources
+    """Return no context until an approved, access-controlled retriever is introduced.
+
+    The service deliberately does not load prompts, templates, or vector-store content from
+    user-controlled paths or remote hubs.
+    """
+    del query
+    return "", []
 
 
 def generate_response(message: str, history: list[dict], context: str) -> str:

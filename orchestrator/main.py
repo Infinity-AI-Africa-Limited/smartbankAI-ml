@@ -8,15 +8,15 @@ import logging
 import asyncio
 from enum import Enum
 from collections import defaultdict
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Optional
 import httpx
 import sys
 sys.path.append("/app")
 
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import audit_log_middleware
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
