@@ -2,7 +2,7 @@
 # Agent 7: Smart Dashboard Agent
 # Port: 8008 | Model: K-Means + NLG
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS smart-dashboard
+FROM smartbank-ai-base:latest AS smart-dashboard
 
 # Agent-specific dependencies
 COPY agents/smart_dashboard/requirements.txt /tmp/requirements.txt

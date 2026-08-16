@@ -2,7 +2,7 @@
 # Agent 1: Fraud Detection Agent
 # Port: 8002 | Model: LightGBM + SHAP
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS fraud-detection
+FROM smartbank-ai-base:latest AS fraud-detection
 
 # Agent-specific dependencies
 COPY agents/fraud_detection/requirements.txt /tmp/requirements.txt

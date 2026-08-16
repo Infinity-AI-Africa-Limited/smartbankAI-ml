@@ -2,7 +2,7 @@
 # Agent 4: Personalization Agent
 # Port: 8005 | Model: SVD Collaborative Filtering + LightGBM NBA
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS personalization
+FROM smartbank-ai-base:latest AS personalization
 
 # Agent-specific dependencies
 COPY agents/personalization/requirements.txt /tmp/requirements.txt

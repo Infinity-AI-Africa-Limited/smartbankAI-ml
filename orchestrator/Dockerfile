@@ -2,7 +2,7 @@
 # SmartBank AI — Agent Orchestrator
 # Port: 8001 | Role: Central router, circuit breaker, audit logger
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS orchestrator
+FROM smartbank-ai-base:latest AS orchestrator
 
 COPY orchestrator/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt

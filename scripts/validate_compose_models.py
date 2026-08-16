@@ -9,6 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = ROOT / "infra" / "docker" / "docker-compose.yml"
+DOCKERFILES = [*ROOT.glob("agents/*/Dockerfile"), ROOT / "orchestrator" / "Dockerfile"]
 EXPECTED = {
     "fraud-detection": "fraud_detection",
     "credit-risk": "credit_risk",
@@ -35,6 +36,10 @@ def validate() -> None:
             raise ValueError(f"{service} is missing read-only model mount {expected_mount}")
         if definition.get("environment", {}).get("MODEL_DIR") != "/app/models":
             raise ValueError(f"{service} is missing MODEL_DIR=/app/models")
+    for dockerfile in DOCKERFILES:
+        contents = dockerfile.read_text(encoding="utf-8")
+        if "smartbankAI-base" in contents:
+            raise ValueError(f"{dockerfile.relative_to(ROOT)} references an invalid uppercase base image")
 
 
 if __name__ == "__main__":

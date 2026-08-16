@@ -2,7 +2,7 @@
 # Agent 8: Data Aggregation Agent
 # Port: 8009 | Model: ETL + Entity Resolution
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS data-aggregation
+FROM smartbank-ai-base:latest AS data-aggregation
 
 # Agent-specific dependencies
 COPY agents/data_aggregation/requirements.txt /tmp/requirements.txt

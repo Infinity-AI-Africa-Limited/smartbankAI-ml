@@ -2,7 +2,7 @@
 # Agent 6: Conversational Ai Agent
 # Port: 8007 | Model: RAG + Claude API
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS conversational-ai
+FROM smartbank-ai-base:latest AS conversational-ai
 
 # Agent-specific dependencies
 COPY agents/conversational_ai/requirements.txt /tmp/requirements.txt

@@ -2,7 +2,7 @@
 # Agent 5: Predictive Analytics Agent
 # Port: 8006 | Model: Prophet + LightGBM Churn + ARIMA
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS predictive-analytics
+FROM smartbank-ai-base:latest AS predictive-analytics
 
 # Agent-specific dependencies
 COPY agents/predictive_analytics/requirements.txt /tmp/requirements.txt

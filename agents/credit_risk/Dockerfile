@@ -2,7 +2,7 @@
 # Agent 2: Credit Risk Agent
 # Port: 8003 | Model: WoE Scorecard + LightGBM
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS credit-risk
+FROM smartbank-ai-base:latest AS credit-risk
 
 # Agent-specific dependencies
 COPY agents/credit_risk/requirements.txt /tmp/requirements.txt
