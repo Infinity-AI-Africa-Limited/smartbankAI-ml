@@ -92,6 +92,12 @@ docker compose -f infra/docker/docker-compose.yml up --build
 
 ---
 
+## Production Hardening
+
+Before deploying outside a synthetic development environment, read the [Claude Code production-hardening handoff](docs/CLAUDE_CODE_PRODUCTION_HANDOFF.md). It defines the review order, advisory-only operating model, security baseline, model governance gates, and bank-UAT acceptance criteria.
+
+---
+
 ## Model Training
 
 Each agent has a `train.py` script. To retrain a specific agent:
