@@ -23,6 +23,10 @@ EXPECTED = {
 
 def validate() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    for service, definition in compose["services"].items():
+        image = definition.get("image")
+        if image and image != image.lower():
+            raise ValueError(f"{service} has an invalid uppercase Docker image tag: {image}")
     for service, agent in EXPECTED.items():
         definition = compose["services"][service]
         mounts = definition.get("volumes", [])
