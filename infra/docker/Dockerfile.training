@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir \
     statsmodels==0.14.4 \
     lxml==5.3.0
 
-RUN chmod +x infra/docker/run_training_container.sh
+RUN sed -i 's/\r$//' scripts/*.sh infra/docker/*.sh \
+    && chmod +x infra/docker/run_training_container.sh
 
 CMD ["bash", "infra/docker/run_training_container.sh"]
