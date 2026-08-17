@@ -15,7 +15,7 @@ sys.path.append("/app")
 from shared.schemas.base import ConversationalRequest, ConversationalResponse, AgentResponse, HealthResponse
 from shared.middleware.auth import verify_service_token, audit_log_middleware
 from shared.utils.config import get_settings
-from agents.conversational_ai.safety import safety_response
+from agent.safety import safety_response
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
