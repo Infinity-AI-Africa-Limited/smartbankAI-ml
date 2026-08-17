@@ -9,6 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = ROOT / "infra" / "docker" / "docker-compose.yml"
+RUNNER_PATH = ROOT / "scripts" / "run_local_compose_validation.ps1"
 DOCKERFILES = [*ROOT.glob("agents/*/Dockerfile"), ROOT / "orchestrator" / "Dockerfile"]
 EXPECTED = {
     "fraud-detection": "fraud_detection",
@@ -51,6 +52,9 @@ def validate() -> None:
     required_cpu_torch = "--index-url https://download.pytorch.org/whl/cpu torch==2.13.0+cpu"
     if required_cpu_torch not in conversational_contents:
         raise ValueError("The conversational Dockerfile must pin the CPU-only PyTorch wheel for local Compose builds")
+    runner_contents = RUNNER_PATH.read_text(encoding="utf-8")
+    if "up --build -d orchestrator" not in runner_contents:
+        raise ValueError("The local Compose runner must start the orchestrator dependency graph and exclude base-builder")
 
 
 if __name__ == "__main__":

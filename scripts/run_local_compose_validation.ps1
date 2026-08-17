@@ -18,7 +18,9 @@ try {
   # Agent Dockerfiles inherit from this local image. Build it first so Docker
   # never tries to resolve a private development image from a public registry.
   docker compose -f infra/docker/docker-compose.yml build base-builder
-  docker compose -f infra/docker/docker-compose.yml up --build -d
+  # Starting the orchestrator brings up its declared agent and ChromaDB
+  # dependencies, but deliberately excludes the image-only base-builder service.
+  docker compose -f infra/docker/docker-compose.yml up --build -d orchestrator
   docker compose -f infra/docker/docker-compose.yml ps
 
   $health = $null
