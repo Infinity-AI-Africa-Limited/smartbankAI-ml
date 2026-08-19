@@ -3,3 +3,6 @@ data/synthetic/
 agents/*/models/
 __pycache__/
 *.pyc
+.local-smoke-*
+local_advisory_smoke.*
+local_orchestrator_auth_check.*

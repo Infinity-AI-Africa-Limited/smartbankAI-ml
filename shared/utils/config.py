@@ -29,6 +29,7 @@ class AgentSettings(BaseSettings):
     # LLM (Conversational agent)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     llm_model: str = os.getenv("LLM_MODEL", "claude-3-5-sonnet-20241022")
+    enable_remote_rag: bool = os.getenv("SMARTBANK_ENABLE_REMOTE_RAG", "false").lower() == "true"
 
     # Vector store (Conversational agent)
     chroma_host: str = os.getenv("CHROMA_HOST", "chromadb")

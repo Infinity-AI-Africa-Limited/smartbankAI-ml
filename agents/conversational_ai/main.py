@@ -15,7 +15,7 @@ sys.path.append("/app")
 from shared.schemas.base import ConversationalRequest, ConversationalResponse, AgentResponse, HealthResponse
 from shared.middleware.auth import verify_service_token, audit_log_middleware
 from shared.utils.config import get_settings
-from agents.conversational_ai.safety import safety_response
+from agent.safety import safety_response
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -47,26 +47,29 @@ Context from knowledge base:
 @app.on_event("startup")
 async def setup_rag():
     global retriever, llm_client, synthetic_retriever
-    try:
-        from langchain_community.vectorstores import Chroma
-        from langchain_community.embeddings import HuggingFaceEmbeddings
-        from anthropic import Anthropic
+    if settings.enable_remote_rag:
+        try:
+            from langchain_community.vectorstores import Chroma
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+            from anthropic import Anthropic
 
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        vectorstore = Chroma(
-            collection_name="smartbank_knowledge",
-            embedding_function=embeddings,
-            host=settings.chroma_host,
-            port=settings.chroma_port,
-        )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        logger.info("RAG retriever initialised")
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            vectorstore = Chroma(
+                collection_name="smartbank_knowledge",
+                embedding_function=embeddings,
+                host=settings.chroma_host,
+                port=settings.chroma_port,
+            )
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+            logger.info("RAG retriever initialised")
 
-        if settings.anthropic_api_key:
-            llm_client = Anthropic(api_key=settings.anthropic_api_key)
-            logger.info("Anthropic client initialised")
-    except Exception as e:
-        logger.warning("RAG setup failed (running in stub mode): %s", e)
+            if settings.anthropic_api_key:
+                llm_client = Anthropic(api_key=settings.anthropic_api_key)
+                logger.info("Anthropic client initialised")
+        except Exception as e:
+            logger.warning("RAG setup failed (running in synthetic fallback mode): %s", e)
+    else:
+        logger.info("Remote RAG disabled; using the local synthetic retrieval baseline when available")
     baseline_path = Path(settings.model_dir) / "tfidf_retriever.pkl"
     if baseline_path.exists():
         with baseline_path.open("rb") as handle:

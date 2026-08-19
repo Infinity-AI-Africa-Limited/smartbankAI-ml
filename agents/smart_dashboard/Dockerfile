@@ -2,7 +2,7 @@
 # Agent 7: Smart Dashboard Agent
 # Port: 8008 | Model: K-Means + NLG
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS smart-dashboard
+FROM smartbank-ai-base:latest AS smart-dashboard
 
 # Agent-specific dependencies
 COPY agents/smart_dashboard/requirements.txt /tmp/requirements.txt
@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/smart_dashboard/ /app/agent/
 
 # Model artefacts directory
-RUN mkdir -p /app/models
+USER root
+RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
+USER smartbank
 
 ENV AGENT_NAME=smart_dashboard \
     AGENT_VERSION=1.0.0 \
