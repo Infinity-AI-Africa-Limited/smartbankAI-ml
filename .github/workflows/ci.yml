@@ -8,19 +8,23 @@ on:
   workflow_dispatch:
     inputs:
       deploy_environment:
-        description: "Environment to promote after successful integration tests"
+        description: "Environment to promote after a successful build"
         required: true
         type: choice
         options: [staging, production]
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/smartbankAI
+  IMAGE_PREFIX: ${{ github.repository_owner }}/smartbank-ai
+  BASE_IMAGE: smartbank-ai-base:latest
 
 jobs:
-  # ── 1. Lint & Unit Tests ────────────────────────────────────────────────────
+  # ── 1. Lint, audit & unit tests ─────────────────────────────────────────────
   test:
-    name: Lint & Unit Tests
+    name: Lint, Audit & Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,21 +35,40 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install test dependencies
+      # Install the pinned runtime manifests, not floating latest versions, so
+      # the tests exercise the same resolution the images ship.
+      - name: Install pinned runtime dependencies
         run: |
-          pip install pytest pytest-asyncio httpx pydantic pydantic-settings fastapi uvicorn ruff pyyaml
-          pip install lightgbm scikit-learn networkx pandas numpy optuna
+          pip install -r infra/docker/requirements.base.txt
+          for req in agents/*/requirements.txt orchestrator/requirements.txt; do
+            pip install -r "$req"
+          done
 
+      - name: Install test tooling
+        run: pip install pytest pytest-asyncio ruff pip-audit
+
+      # Restored gate: PR #2 added this and the later branch dropped it.
+      - name: Audit dependency manifests
+        run: ./scripts/audit_dependencies.sh
+
+      - name: Lint with ruff
+        run: ruff check agents orchestrator shared scripts tests
+
+      - name: Byte-compile every module
+        run: python -m compileall -q agents orchestrator shared
+
+      # The artefact tests load real serialised models, so the synthetic build
+      # runs first. Artefacts are development-only and never leave the runner.
       - name: Build synthetic development artefacts
         run: |
           chmod +x scripts/build_synthetic_models.sh
           ./scripts/build_synthetic_models.sh
 
-      - name: Validate local model mounts
-        run: python scripts/validate_compose_models.py
+      - name: Validate synthetic data quality
+        run: python scripts/validate_synthetic_data.py
 
       - name: Run unit tests
-        run: pytest tests/unit/ -v --tb=short
+        run: pytest tests/unit -q
 
       - name: Verify versioned API contract
         run: |
@@ -53,157 +76,117 @@ jobs:
           grep -F "version: 2026-08-01" contracts/ml-orchestrator.v1.openapi.yaml
           grep -F "/v1/route" contracts/ml-orchestrator.v1.openapi.yaml
 
-      - name: Lint with ruff
-        run: ruff check agents/ orchestrator/ shared/ scripts/ tests/
+      # The advisory posture is a merge gate, not a convention.
+      - name: Assert no unauthenticated orchestrator route
+        run: |
+          if grep -nE '^@app\.(get|post)\(' orchestrator/main.py | grep -v '/health' > /tmp/routes.txt; then
+            while read -r line; do
+              lineno="${line%%:*}"
+              sed -n "${lineno}p" orchestrator/main.py | grep -q 'Depends(verify_platform_request)' \
+                || { echo "Unauthenticated orchestrator route at line ${lineno}"; exit 1; }
+            done < /tmp/routes.txt
+          fi
 
-  # ── 2. Build & Push Docker Images ──────────────────────────────────────────
+      - name: Assert the retrieval stack stays removed
+        run: |
+          ! grep -rniE 'langchain|chromadb|sentence-transformers|HuggingFaceEmbeddings' \
+            agents/*/requirements.txt agents/*/main.py
+
+  # ── 2. Build images ─────────────────────────────────────────────────────────
+  # Single job: every agent image inherits FROM the base, so the base must exist
+  # in the same Docker context. A parallel matrix cannot satisfy that.
   build:
-    name: Build Docker Images
+    name: Build Images
     runs-on: ubuntu-latest
     needs: test
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        service:
-          - name: base
-            dockerfile: infra/docker/Dockerfile.base
-            tag: smartbankAI-base
-          - name: orchestrator
-            dockerfile: orchestrator/Dockerfile
-            tag: smartbankAI-orchestrator
-          - name: fraud-detection
-            dockerfile: agents/fraud_detection/Dockerfile
-            tag: smartbankAI-fraud-detection
-          - name: credit-risk
-            dockerfile: agents/credit_risk/Dockerfile
-            tag: smartbankAI-credit-risk
-          - name: aml-compliance
-            dockerfile: agents/aml_compliance/Dockerfile
-            tag: smartbankAI-aml-compliance
-          - name: personalization
-            dockerfile: agents/personalization/Dockerfile
-            tag: smartbankAI-personalization
-          - name: predictive-analytics
-            dockerfile: agents/predictive_analytics/Dockerfile
-            tag: smartbankAI-predictive-analytics
-          - name: conversational-ai
-            dockerfile: agents/conversational_ai/Dockerfile
-            tag: smartbankAI-conversational-ai
-          - name: smart-dashboard
-            dockerfile: agents/smart_dashboard/Dockerfile
-            tag: smartbankAI-smart-dashboard
-          - name: data-aggregation
-            dockerfile: agents/data_aggregation/Dockerfile
-            tag: smartbankAI-data-aggregation
-
     steps:
       - uses: actions/checkout@v4
 
+      - uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service.name }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+      - name: Build base image
+        run: docker build -f infra/docker/Dockerfile.base -t "$BASE_IMAGE" .
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ matrix.service.dockerfile }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ── 3. Integration Tests ────────────────────────────────────────────────────
-  integration-test:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Start services
+      - name: Build service images
         run: |
-          docker compose -f infra/docker/docker-compose.yml up -d
-          sleep 30
-
-      - name: Run health checks
-        run: ./scripts/health_check.sh
-
-      - name: Run integration tests
-        run: |
-          pip install pytest pytest-asyncio httpx
-          pytest tests/integration/ -v --tb=short
-
-      - name: Tear down
-        if: always()
-        run: docker compose -f infra/docker/docker-compose.yml down -v
-
-  # ── 4. Deploy to Staging ────────────────────────────────────────────────────
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: integration-test
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'staging'
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure kubectl
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
-
-      - name: Deploy to staging
-        run: kubectl apply -k infra/k8s/overlays/staging
-
-      - name: Wait for rollout
-        run: |
-          kubectl rollout status deployment/orchestrator -n smartbank-staging --timeout=5m
-          kubectl rollout status deployment/fraud-detection -n smartbank-staging --timeout=5m
-
-  # ── 5. Deploy to Production ─────────────────────────────────────────────────
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: integration-test
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_environment == 'production'
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure kubectl
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
-
-      - name: Deploy to production
-        run: kubectl apply -k infra/k8s/overlays/production
-
-      - name: Wait for rollout
-        run: |
-          for svc in orchestrator fraud-detection credit-risk aml-compliance personalization predictive-analytics conversational-ai smart-dashboard data-aggregation; do
-            kubectl rollout status deployment/$svc -n smartbank-production --timeout=10m
+          set -euo pipefail
+          build() { docker build -f "$1" -t "${REGISTRY}/${IMAGE_PREFIX}-$2:${GITHUB_SHA}" . ; }
+          build orchestrator/Dockerfile orchestrator
+          for dir in agents/*/; do
+            name="$(basename "$dir" | tr '_' '-')"
+            build "${dir}Dockerfile" "$name"
           done
 
-      - name: Notify on success
-        if: success()
-        run: echo "Production deployment successful — SmartBank AI ML stack v${{ github.sha }}"
+      - name: Scan images for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-orchestrator:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-orchestrator:${{ github.sha }}
+          format: spdx-json
+          artifact-name: sbom-orchestrator.spdx.json
+
+      # Images are pushed under the commit SHA only. No ":latest" on main: a
+      # floating tag makes every merge a silent production redeploy and leaves
+      # nothing specific to roll back to.
+      - name: Push images
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          docker push "${REGISTRY}/${IMAGE_PREFIX}-orchestrator:${GITHUB_SHA}"
+          for dir in agents/*/; do
+            name="$(basename "$dir" | tr '_' '-')"
+            docker push "${REGISTRY}/${IMAGE_PREFIX}-${name}:${GITHUB_SHA}"
+          done
+
+  # ── 3. Deploy ───────────────────────────────────────────────────────────────
+  # Both environments must carry GitHub environment protection rules with
+  # required reviewers. The workflow deliberately encodes no automatic promotion.
+  deploy:
+    name: Deploy to ${{ inputs.deploy_environment }}
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    environment: ${{ inputs.deploy_environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Pin image tags to this commit
+        run: |
+          cd "infra/k8s/overlays/${{ inputs.deploy_environment }}"
+          kustomize edit set image \
+            "orchestrator=${REGISTRY}/${IMAGE_PREFIX}-orchestrator:${GITHUB_SHA}"
+
+      - name: Apply
+        run: kubectl apply -k "infra/k8s/overlays/${{ inputs.deploy_environment }}"
+
+      - name: Wait for rollout
+        run: |
+          for svc in orchestrator fraud-detection credit-risk aml-compliance \
+                     personalization predictive-analytics conversational-ai \
+                     smart-dashboard data-aggregation; do
+            kubectl rollout status "deployment/$svc" --timeout=10m
+          done

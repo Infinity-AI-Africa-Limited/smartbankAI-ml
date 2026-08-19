@@ -1,0 +1,28 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 140
+exclude = [".venv", "__pycache__", "data"]
+
+[tool.ruff.lint]
+# E/F: correctness. B: bugbear. S: bandit security rules — these catch unverified
+# deserialisation, weak hashing and bare asserts, which is the reason the lint
+# gate exists at all. ASYNC: blocking calls inside async request handlers.
+# DTZ: naive datetimes, which corrupt the advisory audit chain.
+select = ["E4", "E7", "E9", "F", "B", "S", "ASYNC", "DTZ", "C4"]
+ignore = [
+  "S101",  # assert: used deliberately in tests
+  "E402",  # module-level import after sys.path.append, required by the container layout
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Training and synthetic-data generators are development-only and never serve traffic.
+"scripts/*" = ["S311", "S603", "S607", "S324"]
+"agents/*/train.py" = ["S311"]
+"agents/*/build_knowledge.py" = ["S311"]
+# The verified loader is the single place pickle is permitted. The load is
+# guarded by a SHA-256 manifest check performed immediately beforehand.
+"shared/utils/artefacts.py" = ["S301"]
+"tests/unit/test_synthetic_model_artifacts.py" = ["S301"]
+"tests/*" = ["S105", "S106"]
+
+[tool.pytest.ini_options]
