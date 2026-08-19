@@ -62,9 +62,10 @@ class TransactionRequest(BaseModel):
 
 class LoanApplicationRequest(BaseModel):
     customer_id: str
-    # Age is intentionally optional in the v1 minimised contract. The current
-    # scorecard uses a neutral fallback until a reviewed replacement is trained.
-    age: int = 35
+    # Not a model input: the scorecard's feature set uses account_age_months, not
+    # applicant age. Carried as optional metadata only, with no default, so that
+    # nothing downstream can mistake a filler value for a supplied one.
+    age: Optional[int] = None
     monthly_income_ngn: float
     employment_type: str  # salaried | self_employed | informal | unemployed
     loan_amount_ngn: float

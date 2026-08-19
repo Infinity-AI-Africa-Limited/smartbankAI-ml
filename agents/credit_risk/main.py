@@ -3,6 +3,7 @@ Agent 2: Credit Risk Agent
 Models: WoE Logistic Regression Scorecard (CBN-explainable) + LightGBM challenger
 Port: 8003
 """
+import os
 import time
 import logging
 import pandas as pd
@@ -106,6 +107,13 @@ def compute_score(app: LoanApplicationRequest) -> tuple[float, float, list[dict]
     return credit_score, pd_prob, factors[:3]
 
 
+# Affordability ceiling. This is bank credit policy, not a model output: it is
+# named and versioned here so a credit-risk owner can approve or change it
+# without a code review of the serving path. Override per environment.
+AFFORDABILITY_INCOME_MULTIPLE = float(os.getenv("SMARTBANK_AFFORDABILITY_INCOME_MULTIPLE", "6"))
+AFFORDABILITY_POLICY_ID = os.getenv("SMARTBANK_AFFORDABILITY_POLICY_ID", "unapproved-development-default")
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health():
     return HealthResponse(
@@ -144,7 +152,8 @@ async def predict(loan_app: LoanApplicationRequest):
             "credit_score": credit_score,
             "probability_of_default": round(pd_prob, 4),
             "advisory_recommendation": recommendation,
-            "max_recommended_loan_ngn": round(loan_app.monthly_income_ngn * 6, 0) if recommendation != "REFER_FOR_ALTERNATIVE_OPTIONS" else 0,
+            "max_recommended_loan_ngn": round(loan_app.monthly_income_ngn * AFFORDABILITY_INCOME_MULTIPLE, 0) if recommendation != "REFER_FOR_ALTERNATIVE_OPTIONS" else 0,
+            "affordability_policy": AFFORDABILITY_POLICY_ID,
             "top_factors": factors,
             "narrative": narrative,
             "human_review_required": True,
