@@ -12,9 +12,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/credit_risk/ /app/agent/
 
 # Model artefacts directory
-USER root
-RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
-USER smartbank
 
 ENV AGENT_NAME=credit_risk \
     AGENT_VERSION=1.0.0 \
@@ -23,6 +20,9 @@ ENV AGENT_NAME=credit_risk \
     PYTHONPATH=/app
 
 EXPOSE 8003
+
+# Drop privileges for the running service.
+USER smartbank
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8003/health || exit 1

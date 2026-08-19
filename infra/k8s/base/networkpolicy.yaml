@@ -1,0 +1,96 @@
+# SmartBank AI — Network isolation
+#
+# Default deny in both directions, then the only two flows the architecture
+# permits: the platform gateway may reach the orchestrator, and the orchestrator
+# may reach the agents. No agent is reachable from outside the namespace, and no
+# pod may make arbitrary outbound calls.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The platform's ML gateway is the sole permitted caller of the orchestrator.
+# The calling namespace must carry the label smartbank.ai/platform-gateway=true.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              smartbank.ai/platform-gateway: "true"
+      ports:
+        - protocol: TCP
+          port: 8001
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-egress-to-agents
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - fraud-detection
+                  - credit-risk
+                  - aml-compliance
+                  - personalization
+                  - predictive-analytics
+                  - conversational-ai
+                  - smart-dashboard
+                  - data-aggregation
+    # DNS resolution only; there is no general internet egress.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Agents accept traffic from the orchestrator alone.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agents-ingress-from-orchestrator
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - fraud-detection
+          - credit-risk
+          - aml-compliance
+          - personalization
+          - predictive-analytics
+          - conversational-ai
+          - smart-dashboard
+          - data-aggregation
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: orchestrator

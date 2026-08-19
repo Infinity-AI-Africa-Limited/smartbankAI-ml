@@ -24,10 +24,14 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: fraud-detection
-          image: ghcr.io/infinityai-africa/smartbankAI-fraud-detection:latest
-          imagePullPolicy: Always
+          image: ghcr.io/infinity-ai-africa-limited/smartbank-ai-fraud-detection:PINNED-BY-OVERLAY
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8002
               protocol: TCP
@@ -36,6 +40,13 @@ spec:
                 name: smartbank-config
             - secretRef:
                 name: smartbank-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             requests:
               memory: "512Mi"
@@ -60,8 +71,14 @@ spec:
           volumeMounts:
             - name: models
               mountPath: /app/models
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: models
           persistentVolumeClaim:
+            readOnly: true
             claimName: models-pvc-fraud-detection
       restartPolicy: Always

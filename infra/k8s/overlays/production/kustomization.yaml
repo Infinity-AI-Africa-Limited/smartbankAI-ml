@@ -3,7 +3,7 @@ kind: Kustomization
 
 namespace: smartbank-production
 
-bases:
+resources:
   - ../../base
 
 configMapGenerator:
@@ -12,3 +12,8 @@ configMapGenerator:
     literals:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
+
+# Image tags are set by the deploy job:
+#   kustomize edit set image <name>=<registry>/<image>:<commit-sha>
+# PINNED-BY-OVERLAY is not a resolvable tag, so an unpinned deploy fails
+# at pull time rather than silently shipping whatever :latest points at.

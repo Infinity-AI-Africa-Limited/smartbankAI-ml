@@ -15,9 +15,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/conversational_ai/ /app/agent/
 
 # Model artefacts directory
-USER root
-RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
-USER smartbank
 
 ENV AGENT_NAME=conversational_ai \
     AGENT_VERSION=1.0.0 \
@@ -26,6 +23,9 @@ ENV AGENT_NAME=conversational_ai \
     PYTHONPATH=/app
 
 EXPOSE 8007
+
+# Drop privileges for the running service.
+USER smartbank
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8007/health || exit 1

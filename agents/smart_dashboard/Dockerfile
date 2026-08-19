@@ -12,9 +12,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/smart_dashboard/ /app/agent/
 
 # Model artefacts directory
-USER root
-RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
-USER smartbank
 
 ENV AGENT_NAME=smart_dashboard \
     AGENT_VERSION=1.0.0 \
@@ -23,6 +20,9 @@ ENV AGENT_NAME=smart_dashboard \
     PYTHONPATH=/app
 
 EXPOSE 8008
+
+# Drop privileges for the running service.
+USER smartbank
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8008/health || exit 1

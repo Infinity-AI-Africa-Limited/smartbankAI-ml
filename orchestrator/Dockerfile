@@ -16,6 +16,9 @@ ENV AGENT_NAME=orchestrator \
 
 EXPOSE 8001
 
+# Drop privileges for the running service.
+USER smartbank
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 

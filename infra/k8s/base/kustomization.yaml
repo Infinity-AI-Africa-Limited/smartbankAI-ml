@@ -15,6 +15,7 @@ resources:
   - conversational-ai-deployment.yaml
   - smart-dashboard-deployment.yaml
   - data-aggregation-deployment.yaml
-  - chromadb-deployment.yaml
   - services.yaml
+  - pvc.yaml
+  - networkpolicy.yaml
   - hpa.yaml
