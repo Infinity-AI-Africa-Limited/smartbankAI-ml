@@ -17,4 +17,13 @@ python3 agents/conversational_ai/build_knowledge.py --knowledge-path "$DATA_DIR/
 python3 agents/smart_dashboard/train.py --customers-path "$DATA_DIR/customers.csv" --activity-path "$DATA_DIR/customer_activity.csv" --transactions-path "$DATA_DIR/transactions.csv" --output-dir agents/smart_dashboard/models
 python3 agents/data_aggregation/train.py --fixtures-dir "$DATA_DIR/aggregation_fixtures" --customers-path "$DATA_DIR/customers.csv" --output-dir agents/data_aggregation/models
 
+# Publish the integrity manifest each agent's loader verifies before it will
+# deserialise an artefact. Without it the services refuse to load a model.
+for model_dir in agents/*/models; do
+  [ -d "$model_dir" ] || continue
+  ( cd "$model_dir" && rm -f artefacts.sha256 &&
+    find . -maxdepth 1 -type f -exec sha256sum {} + | sort -k2 > artefacts.sha256 )
+  echo "Wrote $model_dir/artefacts.sha256"
+done
+
 echo "Synthetic SmartBank AI model build complete. All artefacts are development-only and human-review-required."

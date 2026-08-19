@@ -102,7 +102,7 @@ def build_transactions(rng: np.random.Generator, customers: pd.DataFrame, count:
     days = rng.integers(0, 730, size=count)
     hours = rng.integers(0, 24, size=count)
     minutes = rng.integers(0, 60, size=count)
-    timestamps = [start + timedelta(days=int(d), hours=int(h), minutes=int(m)) for d, h, m in zip(days, hours, minutes)]
+    timestamps = [start + timedelta(days=int(d), hours=int(h), minutes=int(m)) for d, h, m in zip(days, hours, minutes, strict=False)]
     baseline = chosen["avg_monthly_balance_ngn"].to_numpy() / rng.uniform(12, 45, size=count)
     amount = np.maximum(100, rng.lognormal(np.log(np.maximum(baseline, 500)), 0.85, size=count))
     channel = rng.choice(CHANNELS, size=count, p=[0.54, 0.15, 0.10, 0.05, 0.16])

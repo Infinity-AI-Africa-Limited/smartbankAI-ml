@@ -36,7 +36,7 @@ def validate(root: Path) -> dict[str, int | float]:
     require(len(transactions) >= 10_000, "Transaction dataset is too small")
     require(transactions["is_fraud"].nunique() == 2, "Fraud labels require both classes")
     require(loans["outcome"].nunique() == 2, "Loan outcomes require both classes")
-    require(set(["structuring", "smurfing"]).issubset(set(aml["typology_label"])), "AML typologies missing")
+    require({"structuring", "smurfing"}.issubset(set(aml["typology_label"])), "AML typologies missing")
     require(interactions["product"].nunique() >= 5, "Recommendation product coverage is insufficient")
     require(balances["customer_id"].nunique() >= 100, "Cash-flow customer coverage is insufficient")
     require(len(volumes) >= 365, "Volume history requires at least one year")

@@ -2,9 +2,9 @@
 Shared Pydantic schemas for SmartBank AI agent APIs.
 All agents import from this module to ensure consistent request/response contracts.
 """
-from pydantic import BaseModel, Field
-from typing import Any, Optional
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Literal, Optional
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -19,7 +19,7 @@ class AgentResponse(BaseModel):
     """Base response envelope returned by every agent endpoint."""
     agent: str
     version: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     latency_ms: Optional[float] = None
     payload: Any
 
@@ -92,12 +92,22 @@ class CustomerProfileRequest(BaseModel):
 
 # ── Conversational AI schema ──────────────────────────────────────────────────
 
+class ConversationTurn(BaseModel):
+    """One prior turn. Typed so a caller cannot inject arbitrary roles or shapes."""
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
 class ConversationalRequest(BaseModel):
-    session_id: str
-    customer_id: Optional[str] = None
-    message: str
-    conversation_history: list[dict] = []
-    language: str = "en"
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=100)
+    customer_id: Optional[str] = Field(default=None, max_length=100)
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_history: list[ConversationTurn] = Field(default_factory=list, max_length=20)
+    language: str = Field(default="en", min_length=2, max_length=10)
 
 
 class ConversationalResponse(BaseModel):
@@ -105,4 +115,6 @@ class ConversationalResponse(BaseModel):
     response: str
     sources: list[str] = []
     suggested_actions: list[str] = []
-    confidence: float
+    # Optional: omitted unless a calibrated score exists. A constant written here
+    # would land in the advisory audit record as if it had been measured.
+    confidence: Optional[float] = None

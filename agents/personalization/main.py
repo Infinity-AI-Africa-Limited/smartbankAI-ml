@@ -4,7 +4,6 @@ Models: Collaborative filtering (SVD) + Next-Best-Action (LightGBM) + K-Means se
 Port: 8005
 """
 import time
-import pickle
 import logging
 import numpy as np
 import pandas as pd
@@ -14,7 +13,12 @@ import sys
 sys.path.append("/app")
 
 from shared.schemas.base import CustomerProfileRequest, AgentResponse, HealthResponse
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,12 @@ nba_model = None
 kmeans_model = None
 product_similarity = None
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 
 PRODUCTS = ["savings_account", "fixed_deposit", "personal_loan", "credit_card", "investment_plan", "insurance"]
 SEGMENTS = {0: "High Value", 1: "Growing", 2: "At Risk", 3: "Dormant", 4: "New"}
@@ -41,8 +51,7 @@ async def load_models():
     for name, var_name in [("nba_lgbm.pkl", "nba_model"), ("kmeans_segments.pkl", "kmeans_model")]:
         path = model_dir / name
         if path.exists():
-            with open(path, "rb") as f:
-                globals()[var_name] = pickle.load(f)
+            globals()[var_name] = load_verified_artefact(path)
             logger.info("%s loaded", name)
     similarity_path = model_dir / "product_similarity.csv"
     if similarity_path.exists():
@@ -81,7 +90,7 @@ async def recommend(profile: CustomerProfileRequest):
         columns = nba_model.get("columns", encoded.columns.tolist()) if isinstance(nba_model, dict) else encoded.columns.tolist()
         encoded = encoded.reindex(columns=columns, fill_value=0)
         classes = nba_model.get("classes", PRODUCTS) if isinstance(nba_model, dict) else PRODUCTS
-        probabilities = dict(zip(classes, model_object.predict_proba(encoded)[0]))
+        probabilities = dict(zip(classes, model_object.predict_proba(encoded)[0], strict=False))
         owned = set(profile.products_held)
         similarity_scores = {}
         if product_similarity is not None and owned:

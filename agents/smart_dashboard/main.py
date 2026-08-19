@@ -4,7 +4,6 @@ Components: K-Means customer segmentation + NLG insight generator
 Port: 8008
 """
 import time
-import pickle
 import logging
 import pandas as pd
 from pathlib import Path
@@ -14,7 +13,12 @@ import sys
 sys.path.append("/app")
 
 from shared.schemas.base import AgentResponse, HealthResponse
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -24,6 +28,12 @@ app.middleware("http")(audit_log_middleware)
 
 kmeans_model = None
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 
 
 class InsightRequest(BaseModel):
@@ -47,8 +57,7 @@ async def load_model():
     global kmeans_model
     path = Path(settings.model_dir) / "dashboard_kmeans.pkl"
     if path.exists():
-        with open(path, "rb") as f:
-            kmeans_model = pickle.load(f)
+        kmeans_model = load_verified_artefact(path)
         logger.info("K-Means segmentation model loaded")
 
 

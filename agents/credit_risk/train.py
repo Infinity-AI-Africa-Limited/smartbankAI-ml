@@ -28,7 +28,7 @@ def calculate_woe(values: pd.Series, defaulted: pd.Series) -> dict[str, float]:
     good = summary["count"] - summary["sum"]
     return {
         str(bucket): float(np.log(((good_value + 0.5) / total_good) / ((bad_value + 0.5) / total_bad)))
-        for bucket, good_value, bad_value in zip(summary.index, good, summary["sum"])
+        for bucket, good_value, bad_value in zip(summary.index, good, summary["sum"], strict=False)
     }
 
 

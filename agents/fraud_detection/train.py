@@ -9,6 +9,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, precision_recall_curve, roc_auc_score, precision_score, recall_score
@@ -139,7 +140,7 @@ def train(data_path: str, output_dir: str, n_trials: int = 30):
     for row_index, values in enumerate(contributions):
         contribution_rows.append({
             "row": int(row_index),
-            "feature_contributions": {feature: round(float(value), 6) for feature, value in zip(FEATURE_COLS, values[:-1])},
+            "feature_contributions": {feature: round(float(value), 6) for feature, value in zip(FEATURE_COLS, values[:-1], strict=False)},
             "expected_value": round(float(values[-1]), 6),
         })
     with open(output_path / "fraud_tree_shap_samples.json", "w") as f:
@@ -153,7 +154,7 @@ def train(data_path: str, output_dir: str, n_trials: int = 30):
         "review_threshold": round(review_threshold, 6),
         "anomaly_auc_roc": round(float(anomaly_auc), 4),
         "best_params": best_params,
-        "feature_importance": dict(zip(FEATURE_COLS, final_model.feature_importances_.tolist())),
+        "feature_importance": dict(zip(FEATURE_COLS, final_model.feature_importances_.tolist(), strict=False)),
         "synthetic_only": True,
     }
     with open(output_path / "evaluation_report.json", "w") as f:

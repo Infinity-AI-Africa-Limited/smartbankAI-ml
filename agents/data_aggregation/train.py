@@ -7,7 +7,7 @@ import csv
 import json
 import pickle
 import sys
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from pathlib import Path
 
 import pandas as pd

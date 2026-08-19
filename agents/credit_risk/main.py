@@ -4,28 +4,36 @@ Models: WoE Logistic Regression Scorecard (CBN-explainable) + LightGBM challenge
 Port: 8003
 """
 import time
-import pickle
 import logging
 import pandas as pd
 from pathlib import Path
 from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
 import sys
 sys.path.append("/app")
 
 from shared.schemas.base import LoanApplicationRequest, AgentResponse, HealthResponse
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title="SmartBank AI — Credit Risk Agent", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.middleware("http")(audit_log_middleware)
 
 scorecard_model = None
 lgbm_model = None
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 
 SCORE_MIN, SCORE_MAX = 300, 850
 
@@ -43,13 +51,11 @@ async def load_models():
     lgbm_path = model_dir / "credit_lgbm.pkl"
 
     if sc_path.exists():
-        with open(sc_path, "rb") as f:
-            scorecard_model = pickle.load(f)
+        scorecard_model = load_verified_artefact(sc_path)
         logger.info("Scorecard model loaded")
 
     if lgbm_path.exists():
-        with open(lgbm_path, "rb") as f:
-            lgbm_model = pickle.load(f)
+        lgbm_model = load_verified_artefact(lgbm_path)
         logger.info("LightGBM challenger model loaded")
 
 

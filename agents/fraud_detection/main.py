@@ -5,28 +5,28 @@ Port: 8002
 """
 import time
 import logging
-import pickle
 import json
 import numpy as np
 from pathlib import Path
 from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
 import sys
 sys.path.append("/app")
 
 from shared.schemas.base import (
     TransactionRequest, AgentResponse, HealthResponse, ExplainResponse, RiskLevel
 )
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title="SmartBank AI — Fraud Detection Agent", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
 app.middleware("http")(audit_log_middleware)
 
 # ── Model loading ─────────────────────────────────────────────────────────────
@@ -36,6 +36,12 @@ explainer = None
 review_threshold = 0.35
 _start_time = time.time()
 
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
+
 @app.on_event("startup")
 async def load_model():
     global model, explainer, review_threshold
@@ -44,16 +50,14 @@ async def load_model():
     report_path = Path(settings.model_dir) / "evaluation_report.json"
 
     if model_path.exists():
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
+        model = load_verified_artefact(model_path)
         logger.info("Fraud detection model loaded from %s", model_path)
     else:
         logger.warning("Model file not found at %s — running in stub mode", model_path)
 
     if explainer_path.exists():
         import shap  # noqa: F401
-        with open(explainer_path, "rb") as f:
-            explainer = pickle.load(f)
+        explainer = load_verified_artefact(explainer_path)
     if report_path.exists():
         review_threshold = float(json.loads(report_path.read_text()).get("review_threshold", review_threshold))
 

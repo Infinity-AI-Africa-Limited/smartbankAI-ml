@@ -5,8 +5,7 @@ Port: 8004
 """
 import time
 import logging
-import pickle
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from pathlib import Path
 from fastapi import FastAPI, Depends
@@ -16,7 +15,12 @@ import sys
 sys.path.append("/app")
 
 from shared.schemas.base import AgentResponse, HealthResponse, RiskLevel
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,12 @@ app = FastAPI(title="SmartBank AI — AML Compliance Agent", version="1.0.0")
 app.middleware("http")(audit_log_middleware)
 
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 graph_model = None
 
 
@@ -33,8 +43,7 @@ async def load_graph_model():
     global graph_model
     model_path = Path(settings.model_dir) / "aml_graph_isolation.pkl"
     if model_path.exists():
-        with model_path.open("rb") as handle:
-            graph_model = pickle.load(handle)
+        graph_model = load_verified_artefact(model_path)
         logger.info("Synthetic AML graph anomaly artefact loaded")
 
 # CBN structuring threshold (transactions just below ₦1,000,000)
@@ -60,7 +69,9 @@ class AMLResponse(BaseModel):
     risk_score: float
     risk_level: RiskLevel
     typologies_matched: list[str]
-    sar_required: bool
+    # Named as a recommendation: nothing downstream may treat this as authority
+    # to file. Filing follows the institution's MLRO workflow.
+    sar_review_recommended: bool
     sar_narrative: Optional[str] = None
     flagged_transactions: list[str]
 
@@ -68,7 +79,7 @@ class AMLResponse(BaseModel):
 def check_structuring(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect multiple transactions just below ₦1M within 24 hours."""
     flagged = []
-    cutoff = datetime.utcnow() - timedelta(hours=STRUCTURING_WINDOW_HOURS)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STRUCTURING_WINDOW_HOURS)
     recent = [
         t for t in txns
         if t["sender"] == customer_id
@@ -83,20 +94,20 @@ def check_structuring(txns: list[dict], customer_id: str) -> tuple[bool, list[st
 
 def check_smurfing(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect same beneficiary receiving from many different senders."""
-    cutoff = datetime.utcnow() - timedelta(days=SMURFING_WINDOW_DAYS)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SMURFING_WINDOW_DAYS)
     inbound = [
         t for t in txns
         if t["receiver"] == customer_id
         and datetime.fromisoformat(t["timestamp"]) > cutoff
     ]
-    unique_senders = set(t["sender"] for t in inbound)
+    unique_senders = {t["sender"] for t in inbound}
     flagged = [t["id"] for t in inbound] if len(unique_senders) >= SMURFING_MIN_SENDERS else []
     return len(flagged) > 0, flagged
 
 
 def check_layering(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect rapid fund movement through multiple accounts (simplified graph check)."""
-    cutoff = datetime.utcnow() - timedelta(hours=LAYERING_WINDOW_HOURS)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=LAYERING_WINDOW_HOURS)
     recent = [
         t for t in txns
         if datetime.fromisoformat(t["timestamp"]) > cutoff
@@ -126,7 +137,7 @@ def check_layering(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]
 
 
 def generate_sar_narrative(customer_id: str, typologies: list[str], flagged_ids: list[str]) -> str:
-    date_str = datetime.utcnow().strftime("%d %B %Y")
+    date_str = datetime.now(timezone.utc).strftime("%d %B %Y")
     typology_text = " and ".join(typologies)
     return (
         f"DEVELOPMENT-ONLY SUSPICIOUS ACTIVITY REVIEW DRAFT — {date_str}\n\n"
@@ -178,8 +189,8 @@ async def analyse(req: AMLRequest):
         RiskLevel.MEDIUM if risk_score >= 0.2 else
         RiskLevel.LOW
     )
-    sar_required = risk_score >= 0.5
-    sar_narrative = generate_sar_narrative(req.customer_id, typologies_matched, list(set(all_flagged))) if sar_required else None
+    sar_review_recommended = risk_score >= 0.5
+    sar_narrative = generate_sar_narrative(req.customer_id, typologies_matched, list(set(all_flagged))) if sar_review_recommended else None
 
     latency = (time.monotonic() - start) * 1000
     return AgentResponse(
@@ -189,8 +200,8 @@ async def analyse(req: AMLRequest):
             risk_score=round(risk_score, 4),
             risk_level=risk_level,
             typologies_matched=typologies_matched,
-            sar_required=sar_required,
+            sar_review_recommended=sar_review_recommended,
             sar_narrative=sar_narrative,
             flagged_transactions=list(set(all_flagged)),
-        ).model_dump() | {"human_review_required": True, "synthetic_model": graph_model is not None, "sar_review_recommended": sar_required},
+        ).model_dump() | {"human_review_required": True, "synthetic_model": graph_model is not None},
     )

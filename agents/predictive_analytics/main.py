@@ -4,7 +4,6 @@ Models: Prophet (cash flow forecast) + LightGBM (churn) + ARIMA (volume forecast
 Port: 8006
 """
 import time
-import pickle
 import logging
 import numpy as np
 import pandas as pd
@@ -15,7 +14,12 @@ import sys
 sys.path.append("/app")
 
 from shared.schemas.base import AgentResponse, HealthResponse
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,12 @@ churn_model = None
 cashflow_model = None
 volume_model = None
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 
 
 class ChurnRequest(BaseModel):
@@ -56,8 +66,7 @@ async def load_models():
     for filename, variable in [("churn_lgbm.pkl", "churn_model"), ("cashflow_ridge.pkl", "cashflow_model"), ("volume_autoreg_ridge.pkl", "volume_model")]:
         path = Path(settings.model_dir) / filename
         if path.exists():
-            with path.open("rb") as handle:
-                globals()[variable] = pickle.load(handle)
+            globals()[variable] = load_verified_artefact(path)
             logger.info("%s loaded", filename)
 
 
