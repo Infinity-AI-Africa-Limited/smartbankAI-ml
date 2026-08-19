@@ -16,7 +16,11 @@ import httpx
 import sys
 sys.path.append("/app")
 
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
 from shared.schemas.orchestrator_v1 import (
     AdvisoryExplanation,
     AdvisoryResponseV1,
@@ -38,6 +42,12 @@ app = FastAPI(title="SmartBank AI — Agent Orchestrator", version="1.0.0")
 app.middleware("http")(audit_log_middleware)
 
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 
 # ── Agent registry ────────────────────────────────────────────────────────────
 
@@ -103,7 +113,7 @@ async def verify_platform_request(request: Request) -> None:
 
 # ── HTTP client ───────────────────────────────────────────────────────────────
 
-async def call_agent(agent_name: str, endpoint: str, payload: dict, timeout: float = 10.0) -> dict:
+async def call_agent(agent_name: str, endpoint: str, payload: dict, timeout_seconds: float = 10.0) -> dict:
     if circuit_breaker.is_open(agent_name):
         logger.warning("Circuit open for %s — returning fallback", agent_name)
         return {
@@ -117,29 +127,25 @@ async def call_agent(agent_name: str, endpoint: str, payload: dict, timeout: flo
     headers = {"X-Service-Token": settings.service_auth_token, "X-Client-ID": "orchestrator"}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(f"{base_url}{endpoint}", json=payload, headers=headers)
             response.raise_for_status()
             circuit_breaker.record_success(agent_name)
             return response.json()
-    except Exception as e:
+    except Exception:
         circuit_breaker.record_failure(agent_name)
-        logger.error("Agent %s call failed: %s", agent_name, e)
+        # Logged in full for operators; never returned to the caller, because the
+        # detail can carry internal hostnames, payload fragments or stack context.
+        logger.exception("Agent %s call failed", agent_name)
         return {
             "agent": agent_name,
             "status": "error",
             "fallback": True,
-            "message": f"Agent error: {str(e)[:100]}",
+            "message": "Agent call failed. Human review required.",
         }
 
 
 # ── Request models ────────────────────────────────────────────────────────────
-
-class OrchestratorRequest(BaseModel):
-    request_type: str  # "fraud_check" | "credit_assessment" | "aml_check" | "recommend" | "chat" | "insights" | "churn" | "normalise"
-    payload: dict
-    require_agents: Optional[list[str]] = None  # override default routing
-
 
 class HealthSummary(BaseModel):
     orchestrator: str = "ok"
@@ -164,11 +170,19 @@ def validate_payload(request_type: RequestType, payload: dict[str, Any]) -> dict
 
 
 def normalize_confidence(value: Any) -> Optional[float]:
-    if not isinstance(value, (int, float)):
+    """Accept a calibrated 0-1 confidence, or nothing.
+
+    Agents publish confidence on one documented scale. A value outside it is
+    dropped rather than rescaled: guessing whether 0.5 meant a probability or a
+    percentage would write a fabricated number into the advisory audit record,
+    which the platform retains as evidence for a human reviewer.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    # Some established agents return confidence as a 0–100 percentage.
-    normalized = value / 100 if value > 1 else value
-    return max(0.0, min(float(normalized), 1.0))
+    if not 0.0 <= float(value) <= 1.0:
+        logger.warning("Discarding out-of-range confidence value from agent")
+        return None
+    return float(value)
 
 
 def normalise_advisory_result(
@@ -213,7 +227,9 @@ def normalise_advisory_result(
         request_type=request.request_type,
         status="advisory",
         recommendation=recommendation,
-        confidence=normalize_confidence(payload.get("confidence") or raw_result.get("confidence")),
+        confidence=normalize_confidence(
+            payload["confidence"] if "confidence" in payload else raw_result.get("confidence")
+        ),
         human_review_required=True,
         explanation=AdvisoryExplanation(summary=str(narrative) if narrative else None, top_factors=top_factors),
         model=model,
@@ -263,10 +279,15 @@ async def health():
     }
 
 
-async def route_agents(request_type: str, payload: dict[str, Any], require_agents: Optional[list[str]] = None) -> tuple[dict[str, Any], float]:
-    """Route validated data to agents and return aggregate result plus latency."""
+async def route_agents(request_type: str, payload: dict[str, Any]) -> tuple[dict[str, Any], float]:
+    """Route validated data to agents and return aggregate result plus latency.
+
+    Targets are resolved only from ROUTE_MAP. The caller cannot name an agent or
+    an endpoint: a caller-supplied endpoint would be concatenated onto the agent
+    base URL and could redirect the request, and its service token, off-cluster.
+    """
     start = time.monotonic()
-    routes = require_agents or ROUTE_MAP.get(request_type)
+    routes = ROUTE_MAP.get(request_type)
 
     if not routes:
         raise HTTPException(status_code=400, detail=f"Unknown request_type: {request_type}")
@@ -294,13 +315,6 @@ async def route_v1(req: OrchestratorRequestV1):
     payload = validate_payload(req.request_type, req.payload)
     raw_result, latency = await route_agents(req.request_type.value, payload)
     return normalise_advisory_result(req, raw_result, latency)
-
-
-@app.post("/route", deprecated=True, dependencies=[Depends(verify_platform_request)])
-async def route_legacy(req: OrchestratorRequest):
-    """Temporary compatibility endpoint; new platform integrations must use POST /v1/route."""
-    aggregated, latency = await route_agents(req.request_type, req.payload, req.require_agents)
-    return {"request_type": req.request_type, "latency_ms": round(latency, 2), "result": aggregated}
 
 
 @app.get("/circuit-breaker/status", dependencies=[Depends(verify_platform_request)])
