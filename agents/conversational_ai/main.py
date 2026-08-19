@@ -1,6 +1,6 @@
 """
 Agent 6: Conversational AI Agent
-Architecture: RAG (LangChain + ChromaDB) + Claude API for generation
+Architecture: controlled Claude API generation with an approved retrieval boundary
 Port: 8007
 """
 import time
@@ -22,7 +22,6 @@ settings = get_settings()
 app = FastAPI(title="SmartBank AI — Conversational AI Agent", version="1.0.0")
 app.middleware("http")(audit_log_middleware)
 
-retriever = None
 llm_client = None
 synthetic_retriever = None
 _start_time = time.time()
@@ -45,53 +44,57 @@ Context from knowledge base:
 
 
 @app.on_event("startup")
-async def setup_rag():
-    global retriever, llm_client, synthetic_retriever
+async def setup_conversational_client():
+    """Initialise the generation client and the local retrieval baseline.
+
+    Each dependency is initialised in its own block so a failure in one is never
+    reported as a failure in the other. There is deliberately no remote retrieval
+    path: the service must not load prompts, templates, or vector-store content
+    from user-controlled paths or remote model hubs.
+    """
+    global llm_client, synthetic_retriever
+
     if settings.enable_remote_rag:
-        try:
-            from langchain_community.vectorstores import Chroma
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            from anthropic import Anthropic
+        raise RuntimeError(
+            "SMARTBANK_ENABLE_REMOTE_RAG is set but no approved retriever is available. "
+            "A dynamic retrieval path requires a documented retrieval ACL, approved source "
+            "ingest, prompt-injection controls and a security assessment before it is enabled."
+        )
 
-            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            vectorstore = Chroma(
-                collection_name="smartbank_knowledge",
-                embedding_function=embeddings,
-                host=settings.chroma_host,
-                port=settings.chroma_port,
-            )
-            retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-            logger.info("RAG retriever initialised")
+    try:
+        from anthropic import Anthropic
 
-            if settings.anthropic_api_key:
-                llm_client = Anthropic(api_key=settings.anthropic_api_key)
-                logger.info("Anthropic client initialised")
-        except Exception as e:
-            logger.warning("RAG setup failed (running in synthetic fallback mode): %s", e)
-    else:
-        logger.info("Remote RAG disabled; using the local synthetic retrieval baseline when available")
+        if settings.anthropic_api_key:
+            llm_client = Anthropic(api_key=settings.anthropic_api_key)
+            logger.info("Anthropic client initialised")
+        else:
+            logger.error("ANTHROPIC_API_KEY is not configured; generation is unavailable")
+    except Exception:
+        logger.exception("Anthropic client initialisation failed; generation is unavailable")
+
     baseline_path = Path(settings.model_dir) / "tfidf_retriever.pkl"
     if baseline_path.exists():
-        with baseline_path.open("rb") as handle:
-            synthetic_retriever = pickle.load(handle)
-        logger.info("Synthetic retrieval baseline loaded")
+        try:
+            synthetic_retriever = load_verified_artefact(baseline_path)
+            logger.info("Local retrieval baseline loaded")
+        except Exception:
+            logger.exception("Retrieval baseline failed verification; retrieval disabled")
 
 
 def retrieve_context(query: str) -> tuple[str, list[str]]:
-    if retriever is None:
-        if synthetic_retriever is None:
-            return "", []
-        vectorizer = synthetic_retriever["vectorizer"]
-        matrix = synthetic_retriever["matrix"]
-        articles = synthetic_retriever["articles"]
-        scores = (vectorizer.transform([query]) @ matrix.T).toarray().ravel()
-        selected = np.argsort(scores)[::-1][:3]
-        selected_articles = [articles[int(index)] for index in selected if scores[int(index)] > 0]
-        return "\n\n".join(article["content"] for article in selected_articles), [article["source_id"] for article in selected_articles]
-    docs = retriever.get_relevant_documents(query)
-    context = "\n\n".join(d.page_content for d in docs)
-    sources = [d.metadata.get("source", "SmartBank Knowledge Base") for d in docs]
-    return context, sources
+    """Retrieve from the locally built baseline only — never from a remote hub."""
+    if synthetic_retriever is None:
+        return "", []
+    vectorizer = synthetic_retriever["vectorizer"]
+    matrix = synthetic_retriever["matrix"]
+    articles = synthetic_retriever["articles"]
+    scores = (vectorizer.transform([query]) @ matrix.T).toarray().ravel()
+    selected = np.argsort(scores)[::-1][:3]
+    selected_articles = [articles[int(index)] for index in selected if scores[int(index)] > 0]
+    return (
+        "\n\n".join(article["content"] for article in selected_articles),
+        [article["source_id"] for article in selected_articles],
+    )
 
 
 def generate_response(message: str, history: list[dict], context: str) -> str:

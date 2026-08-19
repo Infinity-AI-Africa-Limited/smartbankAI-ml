@@ -51,6 +51,7 @@ async def load_model():
         logger.warning("Model file not found at %s — running in stub mode", model_path)
 
     if explainer_path.exists():
+        import shap  # noqa: F401
         with open(explainer_path, "rb") as f:
             explainer = pickle.load(f)
     if report_path.exists():
