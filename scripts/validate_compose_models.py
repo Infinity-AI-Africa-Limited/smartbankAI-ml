@@ -41,12 +41,25 @@ def validate() -> None:
         contents = dockerfile.read_text(encoding="utf-8")
         if "smartbankAI-base" in contents:
             raise ValueError(f"{dockerfile.relative_to(ROOT)} references an invalid uppercase base image")
-    for service in EXPECTED:
-        dockerfile = ROOT / "agents" / EXPECTED[service] / "Dockerfile"
+    # The base image already creates /app/models and hands it to the runtime
+    # user, and both Compose and Kubernetes replace that directory with a mount
+    # at run time, which carries the host's ownership regardless. Repeating the
+    # chown per agent would therefore change nothing at run time while forcing a
+    # USER root hop into eight otherwise non-root images. Assert the two things
+    # that do hold instead.
+    base_path = ROOT / "infra" / "docker" / "Dockerfile.base"
+    base_contents = base_path.read_text(encoding="utf-8")
+    if "mkdir -p /app/models" not in base_contents:
+        raise ValueError("Dockerfile.base must create /app/models for the runtime user")
+    if "chown -R smartbank:smartbank /app" not in base_contents:
+        raise ValueError("Dockerfile.base must hand /app to the smartbank user")
+    for agent in EXPECTED.values():
+        dockerfile = ROOT / "agents" / agent / "Dockerfile"
         contents = dockerfile.read_text(encoding="utf-8")
-        required_model_setup = "USER root\nRUN mkdir -p /app/models && chown smartbank:smartbank /app/models\nUSER smartbank"
-        if required_model_setup not in contents:
-            raise ValueError(f"{dockerfile.relative_to(ROOT)} does not initialise /app/models for the non-root runtime user")
+        if "USER smartbank" not in contents:
+            raise ValueError(f"{dockerfile.relative_to(ROOT)} must drop to the non-root smartbank user")
+        if contents.rstrip().endswith("USER root"):
+            raise ValueError(f"{dockerfile.relative_to(ROOT)} must not finish as root")
     conversational_dockerfile = ROOT / "agents" / "conversational_ai" / "Dockerfile"
     conversational_contents = conversational_dockerfile.read_text(encoding="utf-8")
     required_cpu_torch = "--index-url https://download.pytorch.org/whl/cpu torch==2.13.0+cpu"
