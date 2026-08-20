@@ -148,7 +148,7 @@ components:
             request_type:
               const: aml_check
             payload:
-              $ref: '#/components/schemas/TransactionFeatures'
+              $ref: '#/components/schemas/AmlFeatures'
     CreditRequest:
       allOf:
         - $ref: '#/components/schemas/ContractMetadata'
@@ -218,11 +218,72 @@ components:
           type: integer
           minimum: 0
       additionalProperties: false
+    AmlTransaction:
+      type: object
+      description: >-
+        One transaction inside an AML typology window. Party fields carry
+        platform-issued pseudonymous keys and are rejected if they look like a
+        raw BVN or NIN.
+      required:
+        - id
+        - sender
+        - receiver
+        - amount_ngn
+        - timestamp
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        sender:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Pseudonymous party key; never a BVN, NIN or account number.
+        receiver:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Pseudonymous party key; never a BVN, NIN or account number.
+        amount_ngn:
+          type: number
+          minimum: 0
+        timestamp:
+          type: string
+          format: date-time
+      additionalProperties: false
+    AmlFeatures:
+      type: object
+      required:
+        - customer_id
+        - transactions
+      properties:
+        customer_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Pseudonymous customer key; never a BVN, NIN or account number.
+        transactions:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/AmlTransaction'
+        check_types:
+          type: array
+          minItems: 1
+          maxItems: 3
+          default: [structuring, layering, smurfing]
+          items:
+            type: string
+            enum: [structuring, layering, smurfing]
+      additionalProperties: false
     CreditFeatures:
       type: object
       required:
         - customer_id
         - monthly_income_ngn
+        - employment_type
         - loan_amount_ngn
         - loan_tenure_months
         - existing_monthly_obligations_ngn

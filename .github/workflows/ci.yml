@@ -45,7 +45,7 @@ jobs:
           done
 
       - name: Install test tooling
-        run: pip install pytest pytest-asyncio ruff pip-audit
+        run: pip install pytest pytest-asyncio ruff pip-audit pyyaml
 
       # Restored gate: PR #2 added this and the later branch dropped it.
       - name: Audit dependency manifests
