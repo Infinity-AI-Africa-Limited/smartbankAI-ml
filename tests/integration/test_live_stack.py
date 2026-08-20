@@ -92,14 +92,23 @@ def test_agents_are_not_reachable_from_the_host(port):
     )
 
 
-def test_models_are_loaded_in_every_agent():
-    """The private-staging gate requires model_loaded: true evidence."""
-    with httpx.Client(base_url=BASE_URL, timeout=30.0) as client:
-        response = client.get("/health")
+@pytest.mark.parametrize("request_type", list(PAYLOADS), ids=lambda rt: rt.value)
+def test_advisory_responses_carry_model_provenance(request_type):
+    """Evidence that a model actually loaded and served the request.
 
-    agents = response.json()["agents"]
-    assert agents, "orchestrator reported no agents"
-    assert all(state == "ok" for state in agents.values()), agents
+    The orchestrator's /health reports reachability only, so it cannot show
+    model_loaded. An advisory that comes back naming the agent that produced it
+    is the evidence available under the current health contract. Surfacing
+    model_loaded per agent needs a health-contract revision, re-pinned in both
+    repositories.
+    """
+    with platform_client() as client:
+        response = client.post("/v1/route", json=envelope(request_type, PAYLOADS[request_type]))
+
+    body = response.json()
+    assert body["status"] == "advisory", body
+    assert body["model"] is not None, f"no model provenance recorded: {body}"
+    assert body["model"]["agent"], body["model"]
 
 
 def test_the_removed_legacy_route_is_not_served():
