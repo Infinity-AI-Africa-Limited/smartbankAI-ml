@@ -51,6 +51,14 @@ def validate() -> None:
         contents = dockerfile.read_text(encoding='utf-8')
         if 'USER smartbank' not in contents:
             raise ValueError(f'{dockerfile.relative_to(ROOT)} does not drop to the non-root runtime user')
+        # Artefacts record the module path of any class they contain, so the
+        # container layout must match the repository layout or the agent cannot
+        # unpickle its own models.
+        agent = EXPECTED[service]
+        if f'/app/agents/{agent}/' not in contents:
+            raise ValueError(f'{dockerfile.relative_to(ROOT)} must copy the package to /app/agents/<name>/')
+        if f'agents.{agent}.main:app' not in contents:
+            raise ValueError(f'{dockerfile.relative_to(ROOT)} must serve agents.<name>.main:app')
     # Nothing imports torch. It was installed for sentence-transformers, which the
     # dependency hardening removed; reinstating it would add a large unused
     # dependency surface to a bank-facing image.

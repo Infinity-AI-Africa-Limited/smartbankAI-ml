@@ -9,7 +9,10 @@ COPY agents/personalization/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Application code
-COPY agents/personalization/ /app/agent/
+# Mirror the repository layout. Serialised artefacts record the module path of
+# any class they contain, so a container that flattens agents/<name> to agent/
+# cannot unpickle its own models.
+COPY agents/personalization/ /app/agents/personalization/
 
 # Model artefacts directory
 
@@ -27,4 +30,4 @@ USER smartbank
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8005/health || exit 1
 
-CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2"]
+CMD ["uvicorn", "agents.personalization.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2"]
