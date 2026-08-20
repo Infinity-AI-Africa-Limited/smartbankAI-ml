@@ -1,14 +1,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent 6: Conversational Ai Agent
-# Port: 8007 | Model: RAG + Claude API
+# Port: 8007 | Model: local TF-IDF retrieval + Claude API
 # ─────────────────────────────────────────────────────────────────────────────
 FROM smartbank-ai-base:latest AS conversational-ai
 
-# Agent-specific dependencies
+# Agent-specific dependencies. No PyTorch: it was here for sentence-transformers,
+# which the dependency hardening removed. Retrieval is a local TF-IDF baseline
+# that needs nothing beyond scikit-learn.
 COPY agents/conversational_ai/requirements.txt /tmp/requirements.txt
-# The local Compose profile is CPU-only. Install PyTorch from its CPU wheel
-# index before sentence-transformers so pip does not download CUDA runtimes.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.13.0+cpu
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Application code

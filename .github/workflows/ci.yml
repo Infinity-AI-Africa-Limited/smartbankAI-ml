@@ -54,6 +54,12 @@ jobs:
       - name: Lint with ruff
         run: ruff check agents orchestrator shared scripts tests
 
+      # This validator had drifted out of date and was not run anywhere, so it
+      # silently asserted a torch install nothing imports and a Dockerfile layout
+      # that had already moved into the base image.
+      - name: Validate Compose and image configuration
+        run: python scripts/validate_compose_models.py
+
       - name: Byte-compile every module
         run: python -m compileall -q agents orchestrator shared
 
