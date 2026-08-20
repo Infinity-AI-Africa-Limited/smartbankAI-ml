@@ -61,11 +61,15 @@ async def load_models():
 def model_frame(profile: CustomerProfileRequest) -> pd.DataFrame:
     age_by_band = {"18-25": 22, "26-35": 30, "36-50": 43, "51+": 56, "46-55": 50, "55+": 58}
     income_by_band = {"low": 115_000, "mid": 285_000, "upper_mid": 640_000, "high": 1_450_000, "premium": 1_450_000}
+    # Demographics are optional under the minimised contract. Fall back to a
+    # neutral cohort rather than failing, and record that it was inferred so the
+    # advisory response shows the recommendation was made without them.
+    income_band = profile.income_band or "unknown"
     income = income_by_band.get(profile.income_band, 285_000)
     return pd.DataFrame([{
         "age": age_by_band.get(profile.age_band, 35), "monthly_income_ngn": income,
         "account_age_months": profile.account_age_months, "products_held_count": len(profile.products_held),
-        "channel_preference": profile.channel_preference, "income_band": profile.income_band,
+        "channel_preference": profile.channel_preference, "income_band": income_band,
         "avg_monthly_balance_ngn": income * 1.2,
     }])
 
@@ -126,6 +130,7 @@ async def recommend(profile: CustomerProfileRequest):
         agent="personalization", version="1.0.0", latency_ms=round(latency, 2),
         payload={
             "customer_id": profile.customer_id,
+            "demographics_provided": profile.age_band is not None and profile.income_band is not None,
             "segment": segment,
             "recommendations": [{"product": p, "confidence": round(float(s), 4)} for p, s in top_3],
             "next_best_action": top_3[0][0] if top_3 else None,

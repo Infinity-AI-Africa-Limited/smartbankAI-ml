@@ -70,6 +70,15 @@ jobs:
       - name: Run unit tests
         run: pytest tests/unit -q
 
+      # Cross-service contract tests. Both rounds of P0 defects were orchestrator
+      # /agent payload mismatches, which unit tests cannot see because each side
+      # is individually correct. These run in-process, so they gate pull requests
+      # - the compose-based job below is skipped on pull_request and cannot.
+      - name: Run integration contract tests
+        env:
+          SERVICE_AUTH_TOKEN: ci-integration-token-not-a-real-secret
+        run: pytest tests/integration -q -m "not live"
+
       - name: Verify versioned API contract
         run: |
           test -f contracts/ml-orchestrator.v1.openapi.yaml
@@ -156,13 +165,54 @@ jobs:
             docker push "${REGISTRY}/${IMAGE_PREFIX}-${name}:${GITHUB_SHA}"
           done
 
-  # ── 3. Deploy ───────────────────────────────────────────────────────────────
+  # ── 3. Live stack ───────────────────────────────────────────────────────────
+  # Real sockets, real container networking, real startup. Also produces the
+  # negative-connectivity evidence the private-staging gate asks for.
+  live:
+    name: Live Stack Tests
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    env:
+      SERVICE_AUTH_TOKEN: ci-live-stack-token-not-a-real-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test tooling
+        run: pip install pytest pytest-asyncio httpx
+
+      - name: Start the stack
+        run: docker compose -f infra/docker/docker-compose.yml up -d --build --wait
+
+      - name: Health check
+        run: ./scripts/health_check.sh
+
+      - name: Run live stack tests
+        env:
+          SMARTBANK_INTEGRATION_BASE_URL: http://localhost:8001
+        run: pytest tests/integration -q -m live
+
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose -f infra/docker/docker-compose.yml logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f infra/docker/docker-compose.yml down -v
+
+  # ── 4. Deploy ───────────────────────────────────────────────────────────────
   # Both environments must carry GitHub environment protection rules with
   # required reviewers. The workflow deliberately encodes no automatic promotion.
   deploy:
     name: Deploy to ${{ inputs.deploy_environment }}
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, live]
     if: github.event_name == 'workflow_dispatch'
     environment: ${{ inputs.deploy_environment }}
     steps:

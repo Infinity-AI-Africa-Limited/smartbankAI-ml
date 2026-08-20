@@ -25,7 +25,13 @@ from shared.middleware.auth import (
 )
 from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
-from agent.safety import safety_response
+# The Dockerfile copies this package to /app/agent, so the container import path
+# differs from the repository one. Support both, otherwise the safety guard is
+# unreachable from the test suite - which is how it went unexercised until now.
+try:  # pragma: no cover - container layout
+    from agent.safety import safety_response
+except ModuleNotFoundError:  # pragma: no cover - repository layout
+    from agents.conversational_ai.safety import safety_response
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

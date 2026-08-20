@@ -80,15 +80,18 @@ class LoanApplicationRequest(BaseModel):
 # ── Customer profile schema (used by Personalization + Predictive agents) ─────
 
 class CustomerProfileRequest(BaseModel):
+    # Mirrors CustomerFeatures in the v1 contract. Everything the platform is
+    # allowed to omit under payload minimisation is optional here too, otherwise
+    # a correctly minimised request is rejected 422 at the agent.
     customer_id: str
-    age_band: str  # 18-25 | 26-35 | 36-45 | 46-55 | 55+
-    income_band: str  # low | mid | high | premium
     products_held: list[str]
     channel_preference: str  # mobile | web | ussd | branch
-    days_since_last_transaction: int
-    monthly_txn_count_3m_avg: float
-    complaint_count_12m: int
     account_age_months: int
+    age_band: Optional[str] = None  # 18-25 | 26-35 | 36-45 | 46-55 | 55+
+    income_band: Optional[str] = None  # low | mid | high | premium
+    days_since_last_transaction: Optional[int] = None
+    monthly_txn_count_3m_avg: Optional[float] = None
+    complaint_count_12m: Optional[int] = None
 
 
 # ── Conversational AI schema ──────────────────────────────────────────────────

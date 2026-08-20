@@ -26,3 +26,8 @@ ignore = [
 "tests/*" = ["S105", "S106"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "live: runs against a live docker-compose stack; skipped unless SMARTBANK_INTEGRATION_BASE_URL is set",
+]
