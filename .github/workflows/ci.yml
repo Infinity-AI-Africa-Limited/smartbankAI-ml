@@ -73,6 +73,12 @@ jobs:
       - name: Validate Compose structure
         run: python scripts/validate_compose_models.py
 
+      # Every artefact must match the digest its loader verifies, and must ship
+      # a card stating what it may be used for. Without this the synthetic build
+      # is only checked for existence.
+      - name: Verify model artefacts and cards
+        run: python scripts/verify_model_artefacts.py
+
       - name: Run unit tests
         run: pytest tests/unit -q
 
@@ -199,6 +205,12 @@ jobs:
       - name: Health check
         run: ./scripts/health_check.sh
 
+      # health_check.sh proves each process answers. Agents fall back to a stub
+      # when no artefact is present and still answer 200, so promotion also
+      # requires that every agent reports model_loaded.
+      - name: Verify every agent loaded its model
+        run: python scripts/verify_model_loading.py
+
       - name: Run live stack tests
         env:
           SMARTBANK_INTEGRATION_BASE_URL: http://localhost:8001
@@ -223,6 +235,27 @@ jobs:
     environment: ${{ inputs.deploy_environment }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Every artefact in this repository is a development-only synthetic build.
+      # Promotion to production therefore requires an independent model-risk
+      # sign-off, recorded as a repository variable a person sets deliberately.
+      # Staging is not gated this way: exercising synthetic models is its point.
+      - name: Require model-risk sign-off for production
+        if: inputs.deploy_environment == 'production'
+        env:
+          APPROVED: ${{ vars.MODEL_VALIDATION_APPROVED }}
+        run: |
+          if [ "$APPROVED" != "true" ]; then
+            echo "Production promotion refused."
+            echo
+            echo "The model artefacts backing this stack are synthetic development builds."
+            echo "They are not evidence of fraud accuracy, credit calibration or AML efficacy."
+            echo
+            echo "Set the MODEL_VALIDATION_APPROVED repository variable to 'true' only after"
+            echo "bank-approved data validation and independent model-risk review, and only"
+            echo "with model cards regenerated to drop the development-only status."
+            exit 1
+          fi
 
       - name: Configure kubectl
         uses: azure/k8s-set-context@ae59a723ba9abe7a9655538854a025448dbab4aa # v4.0.2
