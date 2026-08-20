@@ -15,6 +15,7 @@ import sys
 sys.path.append("/app")
 
 from shared.schemas.base import AgentResponse, HealthResponse, RiskLevel
+from shared.schemas.orchestrator_v1 import AmlFeatures
 from shared.middleware.auth import (
     audit_log_middleware,
     require_secure_configuration,
@@ -58,10 +59,13 @@ SMURFING_MIN_SENDERS = 5
 SMURFING_WINDOW_DAYS = 7
 
 
-class AMLRequest(BaseModel):
-    customer_id: str
-    transactions: list[dict]  # list of {id, sender, receiver, amount_ngn, timestamp}
-    check_types: list[str] = ["structuring", "layering", "smurfing"]
+class AMLRequest(AmlFeatures):
+    """Inbound AML request.
+
+    Inherits the shared orchestrator contract so party fields are validated as
+    pseudonymous keys and timestamps are parsed once, here, rather than being
+    re-parsed from strings inside every typology check.
+    """
 
 
 class AMLResponse(BaseModel):
@@ -76,6 +80,11 @@ class AMLResponse(BaseModel):
     flagged_transactions: list[str]
 
 
+def _aware(value: datetime) -> datetime:
+    """Treat a naive timestamp as UTC so it can be compared with an aware cutoff."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def check_structuring(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect multiple transactions just below ₦1M within 24 hours."""
     flagged = []
@@ -85,7 +94,7 @@ def check_structuring(txns: list[dict], customer_id: str) -> tuple[bool, list[st
         if t["sender"] == customer_id
         and t["amount_ngn"] < STRUCTURING_THRESHOLD_NGN
         and t["amount_ngn"] > STRUCTURING_THRESHOLD_NGN * 0.8
-        and datetime.fromisoformat(t["timestamp"]) > cutoff
+        and _aware(t["timestamp"]) > cutoff
     ]
     if len(recent) >= STRUCTURING_MIN_COUNT:
         flagged = [t["id"] for t in recent]
@@ -98,7 +107,7 @@ def check_smurfing(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]
     inbound = [
         t for t in txns
         if t["receiver"] == customer_id
-        and datetime.fromisoformat(t["timestamp"]) > cutoff
+        and _aware(t["timestamp"]) > cutoff
     ]
     unique_senders = {t["sender"] for t in inbound}
     flagged = [t["id"] for t in inbound] if len(unique_senders) >= SMURFING_MIN_SENDERS else []
@@ -110,7 +119,7 @@ def check_layering(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LAYERING_WINDOW_HOURS)
     recent = [
         t for t in txns
-        if datetime.fromisoformat(t["timestamp"]) > cutoff
+        if _aware(t["timestamp"]) > cutoff
     ]
     # Build adjacency: who sent to whom
     graph = defaultdict(set)
@@ -163,21 +172,22 @@ async def analyse(req: AMLRequest):
     start = time.monotonic()
     typologies_matched = []
     all_flagged = []
+    transactions = [txn.model_dump() for txn in req.transactions]
 
     if "structuring" in req.check_types:
-        matched, flagged = check_structuring(req.transactions, req.customer_id)
+        matched, flagged = check_structuring(transactions, req.customer_id)
         if matched:
             typologies_matched.append("structuring")
             all_flagged.extend(flagged)
 
     if "smurfing" in req.check_types:
-        matched, flagged = check_smurfing(req.transactions, req.customer_id)
+        matched, flagged = check_smurfing(transactions, req.customer_id)
         if matched:
             typologies_matched.append("smurfing")
             all_flagged.extend(flagged)
 
     if "layering" in req.check_types:
-        matched, flagged = check_layering(req.transactions, req.customer_id)
+        matched, flagged = check_layering(transactions, req.customer_id)
         if matched:
             typologies_matched.append("layering")
             all_flagged.extend(flagged)

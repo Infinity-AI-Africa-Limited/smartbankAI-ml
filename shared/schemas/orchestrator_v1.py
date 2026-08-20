@@ -5,7 +5,10 @@ from enum import Enum
 from typing import Any, Literal, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+import re
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 
 CONTRACT_VERSION = "2026-08-01"
@@ -93,6 +96,51 @@ class AssistantFeatures(BaseModel):
     customer_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
     conversation_history: list[ConversationTurn] = Field(default_factory=list, max_length=20)
     language: str = Field(default="en", min_length=2, max_length=10)
+
+
+BVN_LIKE = re.compile(r"^\d{11}$")
+
+
+def _reject_bare_identifier(value: str) -> str:
+    """Party fields carry platform-issued pseudonymous keys, never raw identifiers.
+
+    An 11-digit numeric string is the shape of a BVN or NIN. Rejecting it here
+    stops a caller from sending one into the ML boundary by mistake.
+    """
+    if BVN_LIKE.match(value):
+        raise ValueError(
+            "party identifiers must be platform-issued pseudonymous keys, not raw BVN/NIN values"
+        )
+    return value
+
+
+PartyKey = Annotated[str, Field(min_length=1, max_length=100), AfterValidator(_reject_bare_identifier)]
+
+
+class AmlTransaction(BaseModel):
+    """One transaction inside an AML typology window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100)
+    sender: PartyKey
+    receiver: PartyKey
+    amount_ngn: float = Field(ge=0)
+    timestamp: datetime
+
+
+class AmlFeatures(BaseModel):
+    """Minimised AML payload. Mirrors the aml_compliance agent's /analyse contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    customer_id: PartyKey
+    transactions: list[AmlTransaction] = Field(min_length=1, max_length=500)
+    check_types: list[Literal["structuring", "layering", "smurfing"]] = Field(
+        default_factory=lambda: ["structuring", "layering", "smurfing"],
+        min_length=1,
+        max_length=3,
+    )
 
 
 class OrchestratorRequestV1(ContractRequest):

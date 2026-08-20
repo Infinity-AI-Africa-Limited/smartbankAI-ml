@@ -23,6 +23,7 @@ from shared.middleware.auth import (
 )
 from shared.schemas.orchestrator_v1 import (
     AdvisoryExplanation,
+    AmlFeatures,
     AdvisoryResponseV1,
     CONTRACT_VERSION,
     CreditFeatures,
@@ -158,13 +159,13 @@ def validate_payload(request_type: RequestType, payload: dict[str, Any]) -> dict
     """Validate request-type payloads and reject unnecessary or unexpected fields."""
     model_by_type = {
         RequestType.FRAUD_CHECK: TransactionFeatures,
-        RequestType.AML_CHECK: TransactionFeatures,
+        RequestType.AML_CHECK: AmlFeatures,
         RequestType.CREDIT_ASSESSMENT: CreditFeatures,
         RequestType.RECOMMEND: CustomerFeatures,
         RequestType.CHAT: AssistantFeatures,
     }
     try:
-        return model_by_type[request_type].model_validate(payload).model_dump(exclude_none=True)
+        return model_by_type[request_type].model_validate(payload).model_dump(mode="json", exclude_none=True)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid minimised feature payload: {str(exc)}") from exc
 
@@ -185,56 +186,115 @@ def normalize_confidence(value: Any) -> Optional[float]:
     return float(value)
 
 
+def _is_unavailable(result: dict[str, Any]) -> bool:
+    return bool(result.get("fallback")) or result.get("status") in {"error", "unavailable"}
+
+
+def _extract(result: dict[str, Any]) -> dict[str, Any]:
+    payload = result.get("payload", result)
+    return payload if isinstance(payload, dict) else {"value": payload}
+
+
+# Agents name their advisory field differently; the credit agent deliberately uses
+# `advisory_recommendation` so nothing downstream can mistake it for a decision.
+RECOMMENDATION_KEYS = ("advisory_recommendation", "recommendation", "decision")
+
+
 def normalise_advisory_result(
     request: OrchestratorRequestV1,
-    raw_result: dict[str, Any],
+    agent_results: list[tuple[str, dict[str, Any]]],
     latency_ms: float,
 ) -> AdvisoryResponseV1:
-    """Convert heterogeneous agent outputs into one explicit, human-review-only envelope."""
-    is_unavailable = bool(raw_result.get("fallback")) or raw_result.get("status") in {"error", "unavailable"}
-    if is_unavailable:
+    """Convert heterogeneous agent outputs into one explicit, human-review-only envelope.
+
+    The first route is the primary agent and owns the recommendation. Supporting
+    agents contribute factors and narrative only. If the primary agent is
+    unavailable the whole response is `unavailable`: an advisory response with no
+    recommendation would otherwise read to the platform as a successful call.
+    """
+    received_at = datetime.now(timezone.utc)
+    base: dict[str, Any] = {
+        "correlation_id": request.correlation_id,
+        "request_type": request.request_type,
+        "human_review_required": True,
+        "received_at": received_at,
+        "latency_ms": round(latency_ms, 2),
+    }
+
+    if not agent_results:
         return AdvisoryResponseV1(
-            correlation_id=request.correlation_id,
-            request_type=request.request_type,
             status="unavailable",
-            recommendation="ML service unavailable; route to the configured human-review workflow.",
-            human_review_required=True,
-            received_at=datetime.now(timezone.utc),
-            latency_ms=round(latency_ms, 2),
+            recommendation="No agent was routed for this request; route to the configured human-review workflow.",
+            **base,
         )
 
-    payload = raw_result.get("payload", raw_result)
-    if not isinstance(payload, dict):
-        payload = {"value": payload}
+    primary_agent, primary_result = agent_results[0]
+    supporting = agent_results[1:]
 
-    recommendation = payload.get("recommendation") or payload.get("decision") or raw_result.get("recommendation")
+    if _is_unavailable(primary_result):
+        return AdvisoryResponseV1(
+            status="unavailable",
+            recommendation="ML service unavailable; route to the configured human-review workflow.",
+            **base,
+        )
+
+    payload = _extract(primary_result)
+
+    recommendation = next(
+        (payload[key] for key in RECOMMENDATION_KEYS if payload.get(key) is not None),
+        primary_result.get("recommendation"),
+    )
     if recommendation is not None:
         recommendation = str(recommendation)
 
-    narrative = payload.get("narrative") or payload.get("explanation") or raw_result.get("message")
-    factors = payload.get("top_factors") or payload.get("factors") or []
-    top_factors = [factor for factor in factors if isinstance(factor, dict)][:20] if isinstance(factors, list) else []
+    narratives: list[str] = []
+    primary_narrative = payload.get("narrative") or payload.get("explanation") or primary_result.get("message")
+    if primary_narrative:
+        narratives.append(str(primary_narrative))
 
-    agent_name = raw_result.get("agent") or payload.get("agent")
+    def collect_factors(source: dict[str, Any], agent: str) -> list[dict[str, Any]]:
+        raw = source.get("top_factors") or source.get("factors") or []
+        if not isinstance(raw, list):
+            return []
+        return [{**factor, "agent": agent} for factor in raw if isinstance(factor, dict)]
+
+    top_factors = collect_factors(payload, primary_agent)
+
+    degraded: list[str] = []
+    for agent_name, result in supporting:
+        if _is_unavailable(result):
+            degraded.append(agent_name)
+            continue
+        support_payload = _extract(result)
+        top_factors.extend(collect_factors(support_payload, agent_name))
+        support_narrative = support_payload.get("narrative") or support_payload.get("explanation")
+        if support_narrative:
+            narratives.append(f"{agent_name}: {support_narrative}")
+
+    if degraded:
+        narratives.append(
+            "Supporting signal unavailable from: " + ", ".join(sorted(degraded))
+            + ". Treat this recommendation as partial and escalate to human review."
+        )
+
+    agent_name = primary_result.get("agent") or payload.get("agent") or primary_agent
     model = ModelMetadata(
         agent=str(agent_name),
         model_name=str(payload["model_name"]) if payload.get("model_name") else None,
         model_version=str(payload["model_version"]) if payload.get("model_version") else None,
-    ) if agent_name else None
+    )
+
+    summary = " ".join(narratives)[:4000] if narratives else None
 
     return AdvisoryResponseV1(
-        correlation_id=request.correlation_id,
-        request_type=request.request_type,
         status="advisory",
         recommendation=recommendation,
         confidence=normalize_confidence(
-            payload["confidence"] if "confidence" in payload else raw_result.get("confidence")
+            payload["confidence"] if "confidence" in payload else primary_result.get("confidence")
         ),
-        human_review_required=True,
-        explanation=AdvisoryExplanation(summary=str(narrative) if narrative else None, top_factors=top_factors),
+        explanation=AdvisoryExplanation(summary=summary, top_factors=top_factors[:20]),
         model=model,
-        received_at=datetime.now(timezone.utc),
-        latency_ms=round(latency_ms, 2),
+        **base,
     )
 
 
@@ -279,7 +339,7 @@ async def health():
     }
 
 
-async def route_agents(request_type: str, payload: dict[str, Any]) -> tuple[dict[str, Any], float]:
+async def route_agents(request_type: str, payload: dict[str, Any]) -> tuple[list[tuple[str, dict[str, Any]]], float]:
     """Route validated data to agents and return aggregate result plus latency.
 
     Targets are resolved only from ROUTE_MAP. The caller cannot name an agent or
@@ -296,25 +356,19 @@ async def route_agents(request_type: str, payload: dict[str, Any]) -> tuple[dict
     tasks = [call_agent(agent, endpoint, payload) for agent, endpoint in routes]
     results = await asyncio.gather(*tasks)
 
-    # Aggregate multi-agent responses
-    if len(results) == 1:
-        aggregated = results[0]
-    else:
-        aggregated = {
-            "request_type": request_type,
-            "agents": {routes[i][0]: results[i] for i in range(len(results))},
-        }
-
     latency = (time.monotonic() - start) * 1000
-    return aggregated, latency
+    # The first route is the primary agent: it owns the recommendation. Any further
+    # routes are supporting signal. Returning them separately keeps the primary
+    # result addressable instead of burying it in an opaque aggregate.
+    return [(routes[i][0], results[i]) for i in range(len(results))], latency
 
 
 @app.post("/v1/route", response_model=AdvisoryResponseV1, dependencies=[Depends(verify_platform_request)])
 async def route_v1(req: OrchestratorRequestV1):
     """Private contract endpoint. Every response is advisory and requires human review."""
     payload = validate_payload(req.request_type, req.payload)
-    raw_result, latency = await route_agents(req.request_type.value, payload)
-    return normalise_advisory_result(req, raw_result, latency)
+    agent_results, latency = await route_agents(req.request_type.value, payload)
+    return normalise_advisory_result(req, agent_results, latency)
 
 
 @app.get("/circuit-breaker/status", dependencies=[Depends(verify_platform_request)])
