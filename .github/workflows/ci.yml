@@ -33,7 +33,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-asyncio httpx pydantic pydantic-settings fastapi uvicorn ruff pyyaml
+          pip install pytest pytest-asyncio httpx pydantic pydantic-settings fastapi uvicorn 'ruff==0.6.8' pyyaml
           pip install lightgbm scikit-learn networkx pandas numpy optuna
 
       - name: Build synthetic development artefacts
