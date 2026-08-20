@@ -2,7 +2,7 @@
 # Agent 3: Aml Compliance Agent
 # Port: 8004 | Model: Rule Engine + NetworkX
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS aml-compliance
+FROM smartbank-ai-base:latest AS aml-compliance
 
 # Agent-specific dependencies
 COPY agents/aml_compliance/requirements.txt /tmp/requirements.txt
@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/aml_compliance/ /app/agent/
 
 # Model artefacts directory
-RUN mkdir -p /app/models
+USER root
+RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
+USER smartbank
 
 ENV AGENT_NAME=aml_compliance \
     AGENT_VERSION=1.0.0 \

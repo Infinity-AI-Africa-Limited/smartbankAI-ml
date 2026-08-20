@@ -2,7 +2,7 @@
 # Agent 8: Data Aggregation Agent
 # Port: 8009 | Model: ETL + Entity Resolution
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS data-aggregation
+FROM smartbank-ai-base:latest AS data-aggregation
 
 # Agent-specific dependencies
 COPY agents/data_aggregation/requirements.txt /tmp/requirements.txt
@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY agents/data_aggregation/ /app/agent/
 
 # Model artefacts directory
-RUN mkdir -p /app/models
+USER root
+RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
+USER smartbank
 
 ENV AGENT_NAME=data_aggregation \
     AGENT_VERSION=1.0.0 \

@@ -1,0 +1,428 @@
+openapi: 3.1.0
+info:
+  title: SmartBank AI ML Orchestrator Contract
+  version: 2026-08-01
+  description: |
+    Private, server-to-server contract between the SmartBank AI platform backend and the ML orchestrator.
+    The contract supports advisory analysis only. No response authorises an autonomous banking,
+    compliance, or customer-impacting action. All results require the platform to retain an audit record
+    and apply human review according to tenant policy.
+servers:
+  - url: https://ml-orchestrator.internal
+    description: Example private internal endpoint; do not expose publicly.
+paths:
+  /health:
+    get:
+      operationId: getOrchestratorHealth
+      summary: Return orchestrator health and compatible contract versions.
+      responses:
+        '200':
+          description: Service health.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/route:
+    post:
+      operationId: routeAdvisoryRequest
+      summary: Route one advisory request to the appropriate specialist AI agent.
+      security:
+        - ServiceToken: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/FraudRequest'
+                - $ref: '#/components/schemas/CreditRequest'
+                - $ref: '#/components/schemas/AmlRequest'
+                - $ref: '#/components/schemas/RecommendationRequest'
+                - $ref: '#/components/schemas/AssistantRequest'
+      responses:
+        '200':
+          description: Advisory result; the calling platform must apply human review policy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdvisoryResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          description: Requested contract version is not supported.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: Agent unavailable or circuit open; no autonomous fallback is permitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnavailableResponse'
+components:
+  securitySchemes:
+    ServiceToken:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+      description: Shared service token held only by the platform backend and ML deployment secret store.
+  parameters:
+    ClientId:
+      name: X-Client-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        const: smartbank-platform
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    InvalidRequest:
+      description: Request fails schema or policy validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: Service token is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Request limit exceeded; retry after the returned interval.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ContractMetadata:
+      type: object
+      required: [contract_version, correlation_id, tenant_id, request_type]
+      properties:
+        contract_version:
+          type: string
+          const: '2026-08-01'
+        correlation_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          minLength: 1
+          description: Pseudonymous tenant identifier. Do not provide tenant secrets.
+        request_type:
+          type: string
+          enum: [fraud_check, credit_assessment, aml_check, recommend, chat]
+        requested_at:
+          type: string
+          format: date-time
+    FraudRequest:
+      allOf:
+        - $ref: '#/components/schemas/ContractMetadata'
+        - type: object
+          required: [request_type, payload]
+          properties:
+            request_type:
+              const: fraud_check
+            payload:
+              $ref: '#/components/schemas/TransactionFeatures'
+    AmlRequest:
+      allOf:
+        - $ref: '#/components/schemas/ContractMetadata'
+        - type: object
+          required: [request_type, payload]
+          properties:
+            request_type:
+              const: aml_check
+            payload:
+              $ref: '#/components/schemas/TransactionFeatures'
+    CreditRequest:
+      allOf:
+        - $ref: '#/components/schemas/ContractMetadata'
+        - type: object
+          required: [request_type, payload]
+          properties:
+            request_type:
+              const: credit_assessment
+            payload:
+              $ref: '#/components/schemas/CreditFeatures'
+    RecommendationRequest:
+      allOf:
+        - $ref: '#/components/schemas/ContractMetadata'
+        - type: object
+          required: [request_type, payload]
+          properties:
+            request_type:
+              const: recommend
+            payload:
+              $ref: '#/components/schemas/CustomerFeatures'
+    AssistantRequest:
+      allOf:
+        - $ref: '#/components/schemas/ContractMetadata'
+        - type: object
+          required: [request_type, payload]
+          properties:
+            request_type:
+              const: chat
+            payload:
+              $ref: '#/components/schemas/AssistantFeatures'
+    TransactionFeatures:
+      type: object
+      required:
+        - transaction_id
+        - amount_ngn
+        - channel
+        - hour_of_day
+        - day_of_week
+      properties:
+        transaction_id:
+          type: string
+          description: Platform transaction reference; no full account number.
+        amount_ngn:
+          type: number
+          minimum: 0
+        channel:
+          type: string
+          enum: [web, mobile, ussd, pos, atm, branch, api]
+        merchant_category:
+          type: string
+          maxLength: 100
+        hour_of_day:
+          type: integer
+          minimum: 0
+          maximum: 23
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+        origin_region:
+          type: string
+          maxLength: 100
+        sender_30d_avg_amount:
+          type: number
+          minimum: 0
+        sender_txn_count_1h:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    CreditFeatures:
+      type: object
+      required:
+        - customer_id
+        - monthly_income_ngn
+        - loan_amount_ngn
+        - loan_tenure_months
+        - existing_monthly_obligations_ngn
+        - repayment_history_score
+        - bvn_verified
+        - account_age_months
+        - avg_monthly_balance_ngn
+      properties:
+        customer_id:
+          type: string
+          description: Pseudonymous customer reference, not BVN or NIN.
+        monthly_income_ngn:
+          type: number
+          minimum: 0
+        employment_type:
+          type: string
+          enum: [salaried, self_employed, informal, unemployed, unknown]
+        loan_amount_ngn:
+          type: number
+          minimum: 0
+        loan_tenure_months:
+          type: integer
+          minimum: 1
+          maximum: 120
+        existing_monthly_obligations_ngn:
+          type: number
+          minimum: 0
+        repayment_history_score:
+          type: number
+          minimum: 0
+          maximum: 100
+        bvn_verified:
+          type: boolean
+        account_age_months:
+          type: integer
+          minimum: 0
+        avg_monthly_balance_ngn:
+          type: number
+          minimum: 0
+      additionalProperties: false
+    CustomerFeatures:
+      type: object
+      required: [customer_id, products_held, channel_preference, account_age_months]
+      properties:
+        customer_id:
+          type: string
+        age_band:
+          type: string
+          enum: [18-25, 26-35, 36-45, 46-55, 55+, unknown]
+        income_band:
+          type: string
+          enum: [low, mid, high, premium, unknown]
+        products_held:
+          type: array
+          items:
+            type: string
+          maxItems: 30
+        channel_preference:
+          type: string
+          enum: [mobile, web, ussd, branch, unknown]
+        days_since_last_transaction:
+          type: integer
+          minimum: 0
+        monthly_txn_count_3m_avg:
+          type: number
+          minimum: 0
+        complaint_count_12m:
+          type: integer
+          minimum: 0
+        account_age_months:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    AssistantFeatures:
+      type: object
+      required: [session_id, message]
+      properties:
+        session_id:
+          type: string
+        customer_id:
+          type: string
+          description: Optional pseudonymous customer reference.
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        conversation_history:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
+                maxLength: 4000
+            additionalProperties: false
+        language:
+          type: string
+          default: en
+          maxLength: 10
+      additionalProperties: false
+    AdvisoryResponse:
+      type: object
+      required:
+        - contract_version
+        - correlation_id
+        - decision_id
+        - request_type
+        - status
+        - human_review_required
+        - received_at
+      properties:
+        contract_version:
+          type: string
+          const: '2026-08-01'
+        correlation_id:
+          type: string
+          format: uuid
+        decision_id:
+          type: string
+          format: uuid
+        request_type:
+          type: string
+          enum: [fraud_check, credit_assessment, aml_check, recommend, chat]
+        status:
+          type: string
+          enum: [advisory, unavailable, rejected]
+        recommendation:
+          type: string
+          description: Informational recommendation only; no autonomous action.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        human_review_required:
+          type: boolean
+          const: true
+        explanation:
+          type: object
+          properties:
+            summary:
+              type: string
+            top_factors:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+          additionalProperties: false
+        model:
+          type: object
+          properties:
+            agent:
+              type: string
+            model_name:
+              type: string
+            model_version:
+              type: string
+          additionalProperties: false
+        received_at:
+          type: string
+          format: date-time
+        latency_ms:
+          type: number
+          minimum: 0
+    HealthResponse:
+      type: object
+      required: [status, contract_versions, agents]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        contract_versions:
+          type: array
+          items:
+            type: string
+        agents:
+          type: object
+          additionalProperties:
+            type: string
+    UnavailableResponse:
+      allOf:
+        - $ref: '#/components/schemas/AdvisoryResponse'
+        - type: object
+          properties:
+            status:
+              const: unavailable
+            human_review_required:
+              const: true
+    ErrorResponse:
+      type: object
+      required: [code, message, correlation_id]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        correlation_id:
+          type: string
+          format: uuid

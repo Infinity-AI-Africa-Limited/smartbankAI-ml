@@ -2,17 +2,22 @@
 # Agent 6: Conversational Ai Agent
 # Port: 8007 | Model: RAG + Claude API
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS conversational-ai
+FROM smartbank-ai-base:latest AS conversational-ai
 
 # Agent-specific dependencies
 COPY agents/conversational_ai/requirements.txt /tmp/requirements.txt
+# The local Compose profile is CPU-only. Install PyTorch from its CPU wheel
+# index before sentence-transformers so pip does not download CUDA runtimes.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.13.0+cpu
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Application code
 COPY agents/conversational_ai/ /app/agent/
 
 # Model artefacts directory
-RUN mkdir -p /app/models
+USER root
+RUN mkdir -p /app/models && chown smartbank:smartbank /app/models
+USER smartbank
 
 ENV AGENT_NAME=conversational_ai \
     AGENT_VERSION=1.0.0 \

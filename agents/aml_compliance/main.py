@@ -5,8 +5,10 @@ Port: 8004
 """
 import time
 import logging
+import pickle
 from datetime import datetime, timedelta
 from collections import defaultdict
+from pathlib import Path
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -23,6 +25,17 @@ app = FastAPI(title="SmartBank AI — AML Compliance Agent", version="1.0.0")
 app.middleware("http")(audit_log_middleware)
 
 _start_time = time.time()
+graph_model = None
+
+
+@app.on_event("startup")
+async def load_graph_model():
+    global graph_model
+    model_path = Path(settings.model_dir) / "aml_graph_isolation.pkl"
+    if model_path.exists():
+        with model_path.open("rb") as handle:
+            graph_model = pickle.load(handle)
+        logger.info("Synthetic AML graph anomaly artefact loaded")
 
 # CBN structuring threshold (transactions just below ₦1,000,000)
 STRUCTURING_THRESHOLD_NGN = 1_000_000
@@ -116,15 +129,13 @@ def generate_sar_narrative(customer_id: str, typologies: list[str], flagged_ids:
     date_str = datetime.utcnow().strftime("%d %B %Y")
     typology_text = " and ".join(typologies)
     return (
-        f"SUSPICIOUS ACTIVITY REPORT — {date_str}\n\n"
+        f"DEVELOPMENT-ONLY SUSPICIOUS ACTIVITY REVIEW DRAFT — {date_str}\n\n"
         f"Subject Account: {customer_id}\n"
         f"Reporting Institution: SmartBank AI (powered by Infinity AI Africa Limited)\n\n"
-        f"Nature of Suspicion: The subject account has been flagged for {typology_text} "
-        f"based on automated transaction pattern analysis conducted in accordance with "
-        f"the Money Laundering (Prevention and Prohibition) Act 2022 and NFIU guidelines.\n\n"
+        f"Nature of Review: The subject account has been flagged for {typology_text} "
+        f"by a synthetic-development AML pattern pipeline. This is not a regulatory filing or a legal determination.\n\n"
         f"Flagged Transaction IDs: {', '.join(flagged_ids[:10])}{'...' if len(flagged_ids) > 10 else ''}\n\n"
-        f"This report is submitted for review by the Compliance Officer prior to filing "
-        f"with the Nigerian Financial Intelligence Unit (NFIU)."
+        f"A qualified Compliance Officer must validate the evidence and follow the institution's approved reporting workflow before any filing."
     )
 
 
@@ -132,7 +143,7 @@ def generate_sar_narrative(customer_id: str, typologies: list[str], flagged_ids:
 async def health():
     return HealthResponse(
         agent="aml_compliance", version="1.0.0",
-        model_loaded=True, uptime_seconds=round(time.time() - _start_time, 1),
+        model_loaded=graph_model is not None, uptime_seconds=round(time.time() - _start_time, 1),
     )
 
 
@@ -181,5 +192,5 @@ async def analyse(req: AMLRequest):
             sar_required=sar_required,
             sar_narrative=sar_narrative,
             flagged_transactions=list(set(all_flagged)),
-        ).model_dump(),
+        ).model_dump() | {"human_review_required": True, "synthetic_model": graph_model is not None, "sar_review_recommended": sar_required},
     )

@@ -6,10 +6,10 @@ Port: 8001
 import time
 import logging
 import asyncio
+from datetime import datetime, timezone
 from enum import Enum
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional
 import httpx
@@ -17,12 +17,24 @@ import sys
 sys.path.append("/app")
 
 from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.schemas.orchestrator_v1 import (
+    AdvisoryExplanation,
+    AdvisoryResponseV1,
+    CONTRACT_VERSION,
+    CreditFeatures,
+    CustomerFeatures,
+    HealthResponseV1,
+    ModelMetadata,
+    OrchestratorRequestV1,
+    RequestType,
+    TransactionFeatures,
+    AssistantFeatures,
+)
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title="SmartBank AI — Agent Orchestrator", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.middleware("http")(audit_log_middleware)
 
 _start_time = time.time()
@@ -82,6 +94,13 @@ class CircuitBreaker:
 circuit_breaker = CircuitBreaker()
 
 
+async def verify_platform_request(request: Request) -> None:
+    """Protect the private platform boundary; browser clients must never call this service."""
+    await verify_service_token(request)
+    if request.headers.get("X-Client-ID") != settings.orchestrator_allowed_client_id:
+        raise HTTPException(status_code=403, detail="Unsupported service client")
+
+
 # ── HTTP client ───────────────────────────────────────────────────────────────
 
 async def call_agent(agent_name: str, endpoint: str, payload: dict, timeout: float = 10.0) -> dict:
@@ -129,6 +148,80 @@ class HealthSummary(BaseModel):
     uptime_seconds: float
 
 
+def validate_payload(request_type: RequestType, payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate request-type payloads and reject unnecessary or unexpected fields."""
+    model_by_type = {
+        RequestType.FRAUD_CHECK: TransactionFeatures,
+        RequestType.AML_CHECK: TransactionFeatures,
+        RequestType.CREDIT_ASSESSMENT: CreditFeatures,
+        RequestType.RECOMMEND: CustomerFeatures,
+        RequestType.CHAT: AssistantFeatures,
+    }
+    try:
+        return model_by_type[request_type].model_validate(payload).model_dump(exclude_none=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid minimised feature payload: {str(exc)}") from exc
+
+
+def normalize_confidence(value: Any) -> Optional[float]:
+    if not isinstance(value, (int, float)):
+        return None
+    # Some established agents return confidence as a 0–100 percentage.
+    normalized = value / 100 if value > 1 else value
+    return max(0.0, min(float(normalized), 1.0))
+
+
+def normalise_advisory_result(
+    request: OrchestratorRequestV1,
+    raw_result: dict[str, Any],
+    latency_ms: float,
+) -> AdvisoryResponseV1:
+    """Convert heterogeneous agent outputs into one explicit, human-review-only envelope."""
+    is_unavailable = bool(raw_result.get("fallback")) or raw_result.get("status") in {"error", "unavailable"}
+    if is_unavailable:
+        return AdvisoryResponseV1(
+            correlation_id=request.correlation_id,
+            request_type=request.request_type,
+            status="unavailable",
+            recommendation="ML service unavailable; route to the configured human-review workflow.",
+            human_review_required=True,
+            received_at=datetime.now(timezone.utc),
+            latency_ms=round(latency_ms, 2),
+        )
+
+    payload = raw_result.get("payload", raw_result)
+    if not isinstance(payload, dict):
+        payload = {"value": payload}
+
+    recommendation = payload.get("recommendation") or payload.get("decision") or raw_result.get("recommendation")
+    if recommendation is not None:
+        recommendation = str(recommendation)
+
+    narrative = payload.get("narrative") or payload.get("explanation") or raw_result.get("message")
+    factors = payload.get("top_factors") or payload.get("factors") or []
+    top_factors = [factor for factor in factors if isinstance(factor, dict)][:20] if isinstance(factors, list) else []
+
+    agent_name = raw_result.get("agent") or payload.get("agent")
+    model = ModelMetadata(
+        agent=str(agent_name),
+        model_name=str(payload["model_name"]) if payload.get("model_name") else None,
+        model_version=str(payload["model_version"]) if payload.get("model_version") else None,
+    ) if agent_name else None
+
+    return AdvisoryResponseV1(
+        correlation_id=request.correlation_id,
+        request_type=request.request_type,
+        status="advisory",
+        recommendation=recommendation,
+        confidence=normalize_confidence(payload.get("confidence") or raw_result.get("confidence")),
+        human_review_required=True,
+        explanation=AdvisoryExplanation(summary=str(narrative) if narrative else None, top_factors=top_factors),
+        model=model,
+        received_at=datetime.now(timezone.utc),
+        latency_ms=round(latency_ms, 2),
+    )
+
+
 # ── Routing logic ─────────────────────────────────────────────────────────────
 
 ROUTE_MAP = {
@@ -162,24 +255,24 @@ async def health():
     results = await asyncio.gather(*[check_agent(n, u) for n, u in AGENT_URLS.items()])
     agent_statuses = dict(results)
 
-    return HealthSummary(
-        agents=agent_statuses,
-        circuit_breaker=circuit_breaker.status(),
-        uptime_seconds=round(time.time() - _start_time, 1),
-    )
+    status = "ok" if all(state == "ok" for state in agent_statuses.values()) else "degraded"
+    return {
+        **HealthResponseV1(status=status, contract_versions=[CONTRACT_VERSION], agents=agent_statuses).model_dump(),
+        "circuit_breaker": circuit_breaker.status(),
+        "uptime_seconds": round(time.time() - _start_time, 1),
+    }
 
 
-@app.post("/route")
-async def route(req: OrchestratorRequest):
-    """Main routing endpoint called by the SmartBank AI tRPC server."""
+async def route_agents(request_type: str, payload: dict[str, Any], require_agents: Optional[list[str]] = None) -> tuple[dict[str, Any], float]:
+    """Route validated data to agents and return aggregate result plus latency."""
     start = time.monotonic()
-    routes = req.require_agents or ROUTE_MAP.get(req.request_type)
+    routes = require_agents or ROUTE_MAP.get(request_type)
 
     if not routes:
-        raise HTTPException(status_code=400, detail=f"Unknown request_type: {req.request_type}")
+        raise HTTPException(status_code=400, detail=f"Unknown request_type: {request_type}")
 
     # Execute all required agent calls (parallel where multiple agents needed)
-    tasks = [call_agent(agent, endpoint, req.payload) for agent, endpoint in routes]
+    tasks = [call_agent(agent, endpoint, payload) for agent, endpoint in routes]
     results = await asyncio.gather(*tasks)
 
     # Aggregate multi-agent responses
@@ -187,24 +280,35 @@ async def route(req: OrchestratorRequest):
         aggregated = results[0]
     else:
         aggregated = {
-            "request_type": req.request_type,
+            "request_type": request_type,
             "agents": {routes[i][0]: results[i] for i in range(len(results))},
         }
 
     latency = (time.monotonic() - start) * 1000
-    return {
-        "request_type": req.request_type,
-        "latency_ms": round(latency, 2),
-        "result": aggregated,
-    }
+    return aggregated, latency
 
 
-@app.get("/circuit-breaker/status")
+@app.post("/v1/route", response_model=AdvisoryResponseV1, dependencies=[Depends(verify_platform_request)])
+async def route_v1(req: OrchestratorRequestV1):
+    """Private contract endpoint. Every response is advisory and requires human review."""
+    payload = validate_payload(req.request_type, req.payload)
+    raw_result, latency = await route_agents(req.request_type.value, payload)
+    return normalise_advisory_result(req, raw_result, latency)
+
+
+@app.post("/route", deprecated=True, dependencies=[Depends(verify_platform_request)])
+async def route_legacy(req: OrchestratorRequest):
+    """Temporary compatibility endpoint; new platform integrations must use POST /v1/route."""
+    aggregated, latency = await route_agents(req.request_type, req.payload, req.require_agents)
+    return {"request_type": req.request_type, "latency_ms": round(latency, 2), "result": aggregated}
+
+
+@app.get("/circuit-breaker/status", dependencies=[Depends(verify_platform_request)])
 async def cb_status():
     return circuit_breaker.status()
 
 
-@app.post("/circuit-breaker/reset/{agent_name}")
+@app.post("/circuit-breaker/reset/{agent_name}", dependencies=[Depends(verify_platform_request)])
 async def cb_reset(agent_name: str):
     if agent_name not in AGENT_URLS:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")

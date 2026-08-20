@@ -44,9 +44,11 @@ class ExplainResponse(BaseModel):
 class TransactionRequest(BaseModel):
     transaction_id: str
     amount_ngn: float
-    sender_account: str
-    receiver_account: str
-    channel: str  # mobile | web | ussd | atm | pos
+    # The v1 platform contract sends no full account identifiers. These legacy fields
+    # remain optional to support older internal callers while models use derived features.
+    sender_account: Optional[str] = None
+    receiver_account: Optional[str] = None
+    channel: str  # mobile | web | ussd | atm | pos | branch | api
     merchant_category: Optional[str] = None
     hour_of_day: int
     day_of_week: int
@@ -60,7 +62,9 @@ class TransactionRequest(BaseModel):
 
 class LoanApplicationRequest(BaseModel):
     customer_id: str
-    age: int
+    # Age is intentionally optional in the v1 minimised contract. The current
+    # scorecard uses a neutral fallback until a reviewed replacement is trained.
+    age: int = 35
     monthly_income_ngn: float
     employment_type: str  # salaried | self_employed | informal | unemployed
     loan_amount_ngn: float
