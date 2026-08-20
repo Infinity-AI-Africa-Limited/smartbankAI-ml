@@ -92,6 +92,18 @@ docker compose -f infra/docker/docker-compose.yml up --build
 
 ---
 
+## Synthetic Model Build (Development Only)
+
+The repository includes a reproducible, privacy-safe synthetic Nigerian banking corpus and a full training pipeline for all eight agents. The generated datasets and artefacts are **development-only** and must never be used for production banking decisions.
+
+```bash
+./scripts/build_synthetic_models.sh
+ruff check agents shared scripts tests
+pytest tests/unit -q
+```
+
+See [`docs/synthetic-training-runbook.md`](docs/synthetic-training-runbook.md) for artefacts, local service mounting, and mandatory real-data validation gates.
+
 ## Model Training
 
 Each agent has a `train.py` script. To retrain a specific agent:
@@ -101,7 +113,7 @@ cd agents/fraud_detection
 python train.py --data-path /data/transactions.csv --output-dir ./models
 ```
 
-See `docs/training_runbook.md` for full instructions including GPU requirements for the conversational AI agent.
+See `docs/synthetic-training-runbook.md` for the synthetic development workflow. A future fine-tuned conversational model requires a separately governed GPU training environment and an approved real banking corpus.
 
 ---
 

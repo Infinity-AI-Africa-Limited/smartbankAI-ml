@@ -12,25 +12,28 @@ class AgentSettings(BaseSettings):
     agent_name: str = os.getenv("AGENT_NAME", "unknown")
     agent_version: str = os.getenv("AGENT_VERSION", "1.0.0")
     port: int = int(os.getenv("PORT", 8000))
-    environment: str = os.getenv("ENVIRONMENT", "development")
+    # Defaults to production so that a missing or malformed ENVIRONMENT degrades
+    # toward the safe posture rather than toward the permissive one.
+    environment: str = os.getenv("ENVIRONMENT", "production")
 
     # Security
     service_auth_token: str = os.getenv("SERVICE_AUTH_TOKEN", "")
     orchestrator_url: str = os.getenv("ORCHESTRATOR_URL", "http://orchestrator:8001")
+    orchestrator_allowed_client_id: str = os.getenv("ORCHESTRATOR_ALLOWED_CLIENT_ID", "smartbank-platform")
+    contract_version: str = os.getenv("SMARTBANK_ML_CONTRACT_VERSION", "2026-08-01")
 
     # Database (for agents that persist predictions)
     database_url: str = os.getenv("DATABASE_URL", "")
 
     # Model artefacts
     model_dir: str = os.getenv("MODEL_DIR", "/app/models")
+    allow_unverified_artefacts: bool = os.getenv("SMARTBANK_ALLOW_UNVERIFIED_ARTEFACTS", "false").lower() == "true"
 
     # LLM (Conversational agent)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     llm_model: str = os.getenv("LLM_MODEL", "claude-3-5-sonnet-20241022")
+    enable_remote_rag: bool = os.getenv("SMARTBANK_ENABLE_REMOTE_RAG", "false").lower() == "true"
 
-    # Vector store (Conversational agent)
-    chroma_host: str = os.getenv("CHROMA_HOST", "chromadb")
-    chroma_port: int = int(os.getenv("CHROMA_PORT", 8000))
 
     # Observability
     log_level: str = os.getenv("LOG_LEVEL", "INFO")

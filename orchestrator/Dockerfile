@@ -2,7 +2,7 @@
 # SmartBank AI — Agent Orchestrator
 # Port: 8001 | Role: Central router, circuit breaker, audit logger
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS orchestrator
+FROM smartbank-ai-base:latest AS orchestrator
 
 COPY orchestrator/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
@@ -15,6 +15,9 @@ ENV AGENT_NAME=orchestrator \
     PYTHONPATH=/app
 
 EXPOSE 8001
+
+# Drop privileges for the running service.
+USER smartbank
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1

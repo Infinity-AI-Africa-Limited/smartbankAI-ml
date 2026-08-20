@@ -1,0 +1,115 @@
+# SmartBank AI — Model artefact volumes
+#
+# Every deployment mounts one of these. They were referenced but never defined,
+# so `kubectl apply -k` left every pod Pending.
+#
+# ReadOnlyMany: artefacts are published by the release pipeline, never written
+# by a running service. Set `storageClassName` in the environment overlay.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-orchestrator
+  labels:
+    app: orchestrator
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-fraud-detection
+  labels:
+    app: fraud-detection
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-credit-risk
+  labels:
+    app: credit-risk
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-aml-compliance
+  labels:
+    app: aml-compliance
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-personalization
+  labels:
+    app: personalization
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-predictive-analytics
+  labels:
+    app: predictive-analytics
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-conversational-ai
+  labels:
+    app: conversational-ai
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-smart-dashboard
+  labels:
+    app: smart-dashboard
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc-data-aggregation
+  labels:
+    app: data-aggregation
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 2Gi

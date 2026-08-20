@@ -5,52 +5,61 @@ Port: 8002
 """
 import time
 import logging
-import pickle
+import json
 import numpy as np
 from pathlib import Path
 from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
 import sys
 sys.path.append("/app")
 
 from shared.schemas.base import (
     TransactionRequest, AgentResponse, HealthResponse, ExplainResponse, RiskLevel
 )
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 app = FastAPI(title="SmartBank AI — Fraud Detection Agent", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
 app.middleware("http")(audit_log_middleware)
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 
 model = None
 explainer = None
+review_threshold = 0.35
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
 
 @app.on_event("startup")
 async def load_model():
-    global model, explainer
+    global model, explainer, review_threshold
     model_path = Path(settings.model_dir) / "fraud_lgbm.pkl"
     explainer_path = Path(settings.model_dir) / "fraud_shap_explainer.pkl"
+    report_path = Path(settings.model_dir) / "evaluation_report.json"
 
     if model_path.exists():
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
+        model = load_verified_artefact(model_path)
         logger.info("Fraud detection model loaded from %s", model_path)
     else:
         logger.warning("Model file not found at %s — running in stub mode", model_path)
 
     if explainer_path.exists():
-        import shap
-        with open(explainer_path, "rb") as f:
-            explainer = pickle.load(f)
+        import shap  # noqa: F401
+        explainer = load_verified_artefact(explainer_path)
+    if report_path.exists():
+        review_threshold = float(json.loads(report_path.read_text()).get("review_threshold", review_threshold))
 
 
 # ── Feature engineering ───────────────────────────────────────────────────────
@@ -125,7 +134,9 @@ async def predict(txn: TransactionRequest):
             "transaction_id": txn.transaction_id,
             "fraud_probability": round(fraud_prob, 4),
             "risk_level": risk_level,
-            "action": "BLOCK" if fraud_prob >= 0.85 else "REVIEW" if fraud_prob >= 0.35 else "PASS",
+            "action": "REVIEW" if fraud_prob >= review_threshold else "NO_ACTION",
+            "human_review_required": True,
+            "synthetic_model": model is not None,
         },
     )
 
@@ -140,7 +151,14 @@ async def explain(txn: TransactionRequest):
         fraud_prob = 0.05
 
     top_factors = []
-    if explainer is not None:
+    if model is not None:
+        contributions = model.booster_.predict(features, pred_contrib=True)[0]
+        sorted_idx = np.argsort(np.abs(contributions[:-1]))[::-1][:3]
+        top_factors = [
+            {"feature": FEATURE_NAMES[i], "impact": round(float(contributions[i]), 4)}
+            for i in sorted_idx
+        ]
+    elif explainer is not None:
         shap_values = explainer.shap_values(features)[1][0]
         sorted_idx = np.argsort(np.abs(shap_values))[::-1][:3]
         top_factors = [
@@ -162,9 +180,9 @@ async def explain(txn: TransactionRequest):
     )
 
     narrative = (
-        f"This transaction has a {round(fraud_prob * 100, 1)}% probability of fraud. "
+        f"This transaction has a development-model fraud probability of {round(fraud_prob * 100, 1)}%. "
         f"The top contributing factors are: "
-        + ", ".join(f"{f['feature']} (impact: {f['impact']})" for f in top_factors) + "."
+        + ", ".join(f"{f['feature']} (impact: {f['impact']})" for f in top_factors) + ". Human review is required."
     )
 
     return AgentResponse(

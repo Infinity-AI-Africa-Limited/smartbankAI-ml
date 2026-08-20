@@ -2,9 +2,9 @@
 Shared Pydantic schemas for SmartBank AI agent APIs.
 All agents import from this module to ensure consistent request/response contracts.
 """
-from pydantic import BaseModel, Field
-from typing import Any, Optional
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Literal, Optional
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -19,7 +19,7 @@ class AgentResponse(BaseModel):
     """Base response envelope returned by every agent endpoint."""
     agent: str
     version: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     latency_ms: Optional[float] = None
     payload: Any
 
@@ -44,9 +44,11 @@ class ExplainResponse(BaseModel):
 class TransactionRequest(BaseModel):
     transaction_id: str
     amount_ngn: float
-    sender_account: str
-    receiver_account: str
-    channel: str  # mobile | web | ussd | atm | pos
+    # The v1 platform contract sends no full account identifiers. These legacy fields
+    # remain optional to support older internal callers while models use derived features.
+    sender_account: Optional[str] = None
+    receiver_account: Optional[str] = None
+    channel: str  # mobile | web | ussd | atm | pos | branch | api
     merchant_category: Optional[str] = None
     hour_of_day: int
     day_of_week: int
@@ -60,7 +62,10 @@ class TransactionRequest(BaseModel):
 
 class LoanApplicationRequest(BaseModel):
     customer_id: str
-    age: int
+    # Not a model input: the scorecard's feature set uses account_age_months, not
+    # applicant age. Carried as optional metadata only, with no default, so that
+    # nothing downstream can mistake a filler value for a supplied one.
+    age: Optional[int] = None
     monthly_income_ngn: float
     employment_type: str  # salaried | self_employed | informal | unemployed
     loan_amount_ngn: float
@@ -75,25 +80,38 @@ class LoanApplicationRequest(BaseModel):
 # ── Customer profile schema (used by Personalization + Predictive agents) ─────
 
 class CustomerProfileRequest(BaseModel):
+    # Mirrors CustomerFeatures in the v1 contract. Everything the platform is
+    # allowed to omit under payload minimisation is optional here too, otherwise
+    # a correctly minimised request is rejected 422 at the agent.
     customer_id: str
-    age_band: str  # 18-25 | 26-35 | 36-45 | 46-55 | 55+
-    income_band: str  # low | mid | high | premium
     products_held: list[str]
     channel_preference: str  # mobile | web | ussd | branch
-    days_since_last_transaction: int
-    monthly_txn_count_3m_avg: float
-    complaint_count_12m: int
     account_age_months: int
+    age_band: Optional[str] = None  # 18-25 | 26-35 | 36-45 | 46-55 | 55+
+    income_band: Optional[str] = None  # low | mid | high | premium
+    days_since_last_transaction: Optional[int] = None
+    monthly_txn_count_3m_avg: Optional[float] = None
+    complaint_count_12m: Optional[int] = None
 
 
 # ── Conversational AI schema ──────────────────────────────────────────────────
 
+class ConversationTurn(BaseModel):
+    """One prior turn. Typed so a caller cannot inject arbitrary roles or shapes."""
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
 class ConversationalRequest(BaseModel):
-    session_id: str
-    customer_id: Optional[str] = None
-    message: str
-    conversation_history: list[dict] = []
-    language: str = "en"
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=100)
+    customer_id: Optional[str] = Field(default=None, max_length=100)
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_history: list[ConversationTurn] = Field(default_factory=list, max_length=20)
+    language: str = Field(default="en", min_length=2, max_length=10)
 
 
 class ConversationalResponse(BaseModel):
@@ -101,4 +119,6 @@ class ConversationalResponse(BaseModel):
     response: str
     sources: list[str] = []
     suggested_actions: list[str] = []
-    confidence: float
+    # Optional: omitted unless a calibrated score exists. A constant written here
+    # would land in the advisory audit record as if it had been measured.
+    confidence: Optional[float] = None

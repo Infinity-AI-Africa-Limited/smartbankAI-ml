@@ -5,8 +5,9 @@ Port: 8004
 """
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from pathlib import Path
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -14,7 +15,13 @@ import sys
 sys.path.append("/app")
 
 from shared.schemas.base import AgentResponse, HealthResponse, RiskLevel
-from shared.middleware.auth import verify_service_token, audit_log_middleware
+from shared.schemas.orchestrator_v1 import AmlFeatures
+from shared.middleware.auth import (
+    audit_log_middleware,
+    require_secure_configuration,
+    verify_service_token,
+)
+from shared.utils.artefacts import load_verified_artefact
 from shared.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -23,6 +30,22 @@ app = FastAPI(title="SmartBank AI — AML Compliance Agent", version="1.0.0")
 app.middleware("http")(audit_log_middleware)
 
 _start_time = time.time()
+
+
+@app.on_event("startup")
+async def enforce_secure_configuration() -> None:
+    """Refuse to serve traffic without a usable service token."""
+    require_secure_configuration()
+graph_model = None
+
+
+@app.on_event("startup")
+async def load_graph_model():
+    global graph_model
+    model_path = Path(settings.model_dir) / "aml_graph_isolation.pkl"
+    if model_path.exists():
+        graph_model = load_verified_artefact(model_path)
+        logger.info("Synthetic AML graph anomaly artefact loaded")
 
 # CBN structuring threshold (transactions just below ₦1,000,000)
 STRUCTURING_THRESHOLD_NGN = 1_000_000
@@ -36,10 +59,13 @@ SMURFING_MIN_SENDERS = 5
 SMURFING_WINDOW_DAYS = 7
 
 
-class AMLRequest(BaseModel):
-    customer_id: str
-    transactions: list[dict]  # list of {id, sender, receiver, amount_ngn, timestamp}
-    check_types: list[str] = ["structuring", "layering", "smurfing"]
+class AMLRequest(AmlFeatures):
+    """Inbound AML request.
+
+    Inherits the shared orchestrator contract so party fields are validated as
+    pseudonymous keys and timestamps are parsed once, here, rather than being
+    re-parsed from strings inside every typology check.
+    """
 
 
 class AMLResponse(BaseModel):
@@ -47,21 +73,28 @@ class AMLResponse(BaseModel):
     risk_score: float
     risk_level: RiskLevel
     typologies_matched: list[str]
-    sar_required: bool
+    # Named as a recommendation: nothing downstream may treat this as authority
+    # to file. Filing follows the institution's MLRO workflow.
+    sar_review_recommended: bool
     sar_narrative: Optional[str] = None
     flagged_transactions: list[str]
+
+
+def _aware(value: datetime) -> datetime:
+    """Treat a naive timestamp as UTC so it can be compared with an aware cutoff."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def check_structuring(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect multiple transactions just below ₦1M within 24 hours."""
     flagged = []
-    cutoff = datetime.utcnow() - timedelta(hours=STRUCTURING_WINDOW_HOURS)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STRUCTURING_WINDOW_HOURS)
     recent = [
         t for t in txns
         if t["sender"] == customer_id
         and t["amount_ngn"] < STRUCTURING_THRESHOLD_NGN
         and t["amount_ngn"] > STRUCTURING_THRESHOLD_NGN * 0.8
-        and datetime.fromisoformat(t["timestamp"]) > cutoff
+        and _aware(t["timestamp"]) > cutoff
     ]
     if len(recent) >= STRUCTURING_MIN_COUNT:
         flagged = [t["id"] for t in recent]
@@ -70,23 +103,23 @@ def check_structuring(txns: list[dict], customer_id: str) -> tuple[bool, list[st
 
 def check_smurfing(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect same beneficiary receiving from many different senders."""
-    cutoff = datetime.utcnow() - timedelta(days=SMURFING_WINDOW_DAYS)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SMURFING_WINDOW_DAYS)
     inbound = [
         t for t in txns
         if t["receiver"] == customer_id
-        and datetime.fromisoformat(t["timestamp"]) > cutoff
+        and _aware(t["timestamp"]) > cutoff
     ]
-    unique_senders = set(t["sender"] for t in inbound)
+    unique_senders = {t["sender"] for t in inbound}
     flagged = [t["id"] for t in inbound] if len(unique_senders) >= SMURFING_MIN_SENDERS else []
     return len(flagged) > 0, flagged
 
 
 def check_layering(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]:
     """Detect rapid fund movement through multiple accounts (simplified graph check)."""
-    cutoff = datetime.utcnow() - timedelta(hours=LAYERING_WINDOW_HOURS)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=LAYERING_WINDOW_HOURS)
     recent = [
         t for t in txns
-        if datetime.fromisoformat(t["timestamp"]) > cutoff
+        if _aware(t["timestamp"]) > cutoff
     ]
     # Build adjacency: who sent to whom
     graph = defaultdict(set)
@@ -113,18 +146,16 @@ def check_layering(txns: list[dict], customer_id: str) -> tuple[bool, list[str]]
 
 
 def generate_sar_narrative(customer_id: str, typologies: list[str], flagged_ids: list[str]) -> str:
-    date_str = datetime.utcnow().strftime("%d %B %Y")
+    date_str = datetime.now(timezone.utc).strftime("%d %B %Y")
     typology_text = " and ".join(typologies)
     return (
-        f"SUSPICIOUS ACTIVITY REPORT — {date_str}\n\n"
+        f"DEVELOPMENT-ONLY SUSPICIOUS ACTIVITY REVIEW DRAFT — {date_str}\n\n"
         f"Subject Account: {customer_id}\n"
         f"Reporting Institution: SmartBank AI (powered by Infinity AI Africa Limited)\n\n"
-        f"Nature of Suspicion: The subject account has been flagged for {typology_text} "
-        f"based on automated transaction pattern analysis conducted in accordance with "
-        f"the Money Laundering (Prevention and Prohibition) Act 2022 and NFIU guidelines.\n\n"
+        f"Nature of Review: The subject account has been flagged for {typology_text} "
+        f"by a synthetic-development AML pattern pipeline. This is not a regulatory filing or a legal determination.\n\n"
         f"Flagged Transaction IDs: {', '.join(flagged_ids[:10])}{'...' if len(flagged_ids) > 10 else ''}\n\n"
-        f"This report is submitted for review by the Compliance Officer prior to filing "
-        f"with the Nigerian Financial Intelligence Unit (NFIU)."
+        f"A qualified Compliance Officer must validate the evidence and follow the institution's approved reporting workflow before any filing."
     )
 
 
@@ -132,7 +163,7 @@ def generate_sar_narrative(customer_id: str, typologies: list[str], flagged_ids:
 async def health():
     return HealthResponse(
         agent="aml_compliance", version="1.0.0",
-        model_loaded=True, uptime_seconds=round(time.time() - _start_time, 1),
+        model_loaded=graph_model is not None, uptime_seconds=round(time.time() - _start_time, 1),
     )
 
 
@@ -141,21 +172,22 @@ async def analyse(req: AMLRequest):
     start = time.monotonic()
     typologies_matched = []
     all_flagged = []
+    transactions = [txn.model_dump() for txn in req.transactions]
 
     if "structuring" in req.check_types:
-        matched, flagged = check_structuring(req.transactions, req.customer_id)
+        matched, flagged = check_structuring(transactions, req.customer_id)
         if matched:
             typologies_matched.append("structuring")
             all_flagged.extend(flagged)
 
     if "smurfing" in req.check_types:
-        matched, flagged = check_smurfing(req.transactions, req.customer_id)
+        matched, flagged = check_smurfing(transactions, req.customer_id)
         if matched:
             typologies_matched.append("smurfing")
             all_flagged.extend(flagged)
 
     if "layering" in req.check_types:
-        matched, flagged = check_layering(req.transactions, req.customer_id)
+        matched, flagged = check_layering(transactions, req.customer_id)
         if matched:
             typologies_matched.append("layering")
             all_flagged.extend(flagged)
@@ -167,8 +199,8 @@ async def analyse(req: AMLRequest):
         RiskLevel.MEDIUM if risk_score >= 0.2 else
         RiskLevel.LOW
     )
-    sar_required = risk_score >= 0.5
-    sar_narrative = generate_sar_narrative(req.customer_id, typologies_matched, list(set(all_flagged))) if sar_required else None
+    sar_review_recommended = risk_score >= 0.5
+    sar_narrative = generate_sar_narrative(req.customer_id, typologies_matched, list(set(all_flagged))) if sar_review_recommended else None
 
     latency = (time.monotonic() - start) * 1000
     return AgentResponse(
@@ -178,8 +210,8 @@ async def analyse(req: AMLRequest):
             risk_score=round(risk_score, 4),
             risk_level=risk_level,
             typologies_matched=typologies_matched,
-            sar_required=sar_required,
+            sar_review_recommended=sar_review_recommended,
             sar_narrative=sar_narrative,
             flagged_transactions=list(set(all_flagged)),
-        ).model_dump(),
+        ).model_dump() | {"human_review_required": True, "synthetic_model": graph_model is not None},
     )

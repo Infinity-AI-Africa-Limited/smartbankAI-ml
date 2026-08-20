@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user for security
+# Non-root runtime user. The base image stays root so that derived images can
+# install packages system-wide; every agent drops to this user before CMD.
 RUN useradd -m -u 1000 smartbank
 WORKDIR /app
+RUN mkdir -p /app/models && chown -R smartbank:smartbank /app
 
 # Shared Python dependencies
 COPY infra/docker/requirements.base.txt /tmp/requirements.base.txt
@@ -20,5 +22,3 @@ RUN pip install --no-cache-dir -r /tmp/requirements.base.txt
 
 # Copy shared modules
 COPY shared/ /app/shared/
-
-USER smartbank

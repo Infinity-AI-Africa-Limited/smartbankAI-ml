@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+data/
+data/synthetic/
+agents/*/models/
+.local-smoke-*
+local_advisory_smoke.*
+local_orchestrator_auth_check.*

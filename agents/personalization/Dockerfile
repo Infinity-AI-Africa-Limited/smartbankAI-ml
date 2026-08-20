@@ -2,17 +2,19 @@
 # Agent 4: Personalization Agent
 # Port: 8005 | Model: SVD Collaborative Filtering + LightGBM NBA
 # ─────────────────────────────────────────────────────────────────────────────
-FROM smartbankAI-base:latest AS personalization
+FROM smartbank-ai-base:latest AS personalization
 
 # Agent-specific dependencies
 COPY agents/personalization/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Application code
-COPY agents/personalization/ /app/agent/
+# Mirror the repository layout. Serialised artefacts record the module path of
+# any class they contain, so a container that flattens agents/<name> to agent/
+# cannot unpickle its own models.
+COPY agents/personalization/ /app/agents/personalization/
 
 # Model artefacts directory
-RUN mkdir -p /app/models
 
 ENV AGENT_NAME=personalization \
     AGENT_VERSION=1.0.0 \
@@ -22,7 +24,10 @@ ENV AGENT_NAME=personalization \
 
 EXPOSE 8005
 
+# Drop privileges for the running service.
+USER smartbank
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8005/health || exit 1
 
-CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2"]
+CMD ["uvicorn", "agents.personalization.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2"]

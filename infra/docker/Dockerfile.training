@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libgomp1 libxml2 libxslt1.1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/smartbank-src
+
+COPY . /opt/smartbank-src
+
+# This image intentionally excludes the conversational agent's remote-RAG and
+# GPU-oriented dependencies. The synthetic knowledge builder uses TF-IDF only.
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    pandas==2.2.3 \
+    scikit-learn==1.5.2 \
+    lightgbm==4.5.0 \
+    optuna==3.6.1 \
+    networkx==3.3 \
+    scipy==1.14.1 \
+    statsmodels==0.14.4 \
+    lxml==5.3.0
+
+RUN sed -i 's/\r$//' scripts/*.sh infra/docker/*.sh \
+    && chmod +x infra/docker/run_training_container.sh
+
+CMD ["bash", "infra/docker/run_training_container.sh"]
