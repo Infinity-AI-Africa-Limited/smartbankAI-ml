@@ -10,6 +10,7 @@ absent from the contract's required list.
 These tests fail when the contract and the Pydantic models disagree.
 """
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,12 @@ from shared.schemas.orchestrator_v1 import (
 )
 
 CONTRACT_PATH = Path(__file__).resolve().parents[2] / "contracts" / "ml-orchestrator.v1.openapi.yaml"
+
+# Must equal contractSha256 in the platform repository's
+# contracts/ml-orchestrator.compatibility.json. Both sides pin the same bytes so
+# neither repository can change the wire format alone; update both in one
+# reviewed pull request.
+PINNED_CONTRACT_SHA256 = "9d9c81219674f9b56b474e4e899e6f313ecc51e58e2ca0763ce26013a06f694d"
 CONTRACT = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
 SCHEMAS = CONTRACT["components"]["schemas"]
 
@@ -109,3 +116,11 @@ def test_aml_transaction_item_matches_the_agent_contract():
 def test_every_documented_request_type_has_a_route():
     for request_type, *_ in CASES:
         assert request_type in ROUTE_MAP, f"{request_type} is documented but has no route"
+
+
+def test_contract_matches_the_hash_pinned_by_the_platform():
+    digest = hashlib.sha256(CONTRACT_PATH.read_text(encoding="utf-8").strip().encode("utf-8")).hexdigest()
+    assert digest == PINNED_CONTRACT_SHA256, (
+        "The ML contract no longer matches the hash the platform pins. Update the "
+        "contract and contractSha256 in both repositories in one reviewed pull request."
+    )
